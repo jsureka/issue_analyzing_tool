@@ -18,6 +18,22 @@ class ResultFormatter:
         """Initialize result formatter"""
         logger.info("ResultFormatter initialized")
     
+    def _get_syntax_highlight_language(self, language: str) -> str:
+        """
+        Map internal language name to markdown syntax highlighting
+        
+        Args:
+            language: Internal language name (e.g., "python", "java")
+            
+        Returns:
+            Markdown syntax highlighting language
+        """
+        mapping = {
+            'python': 'python',
+            'java': 'java'
+        }
+        return mapping.get(language, '')
+    
     def aggregate_by_file(self, retrieval_results: List) -> List[Dict[str, Any]]:
         """
         Aggregate function results by file
@@ -32,13 +48,17 @@ class ResultFormatter:
         file_map = defaultdict(list)
         
         for result in retrieval_results:
+            # Get language from result metadata
+            language = getattr(result, 'language', 'python')
+            
             file_map[result.file_path].append({
                 'name': result.function_name,
                 'signature': result.signature,
                 'line_range': [result.start_line, result.end_line],
                 'score': result.similarity_score,
                 'class_name': result.class_name,
-                'docstring': result.docstring
+                'docstring': result.docstring,
+                'language': language
             })
         
         # Convert to list and sort by highest function score
@@ -47,10 +67,14 @@ class ResultFormatter:
             # Sort functions by score
             functions.sort(key=lambda x: x['score'], reverse=True)
             
+            # Get language from first function (all functions in same file have same language)
+            language = functions[0].get('language', 'python') if functions else 'python'
+            
             file_list.append({
                 'file_path': file_path,
                 'score': functions[0]['score'],  # Use highest function score
-                'functions': functions
+                'functions': functions,
+                'language': language
             })
         
         # Sort files by score

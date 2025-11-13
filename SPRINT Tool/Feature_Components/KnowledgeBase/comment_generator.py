@@ -182,6 +182,7 @@ class CommentGenerator:
         line_end = line_result.get('line_end', 0)
         score = line_result.get('score', 0.0)
         snippet = line_result.get('snippet', '')
+        language = line_result.get('language', 'python')  # Get language from result
         
         # Build section
         section = f"\n#### {rank}. `{function_name}` in `{file_path}`\n\n"
@@ -192,15 +193,15 @@ class CommentGenerator:
         if permalink:
             section += f"[View on GitHub]({permalink})\n\n"
         
-        # Add code snippet with line highlights
+        # Add code snippet with line highlights and language-specific syntax
         if snippet:
-            section += self._format_code_snippet(snippet, "python")
+            section += self._format_code_snippet(snippet, language)
             section += "\n"
         
         return section
     
     def _format_function_section(self, func_data: Dict[str, Any], rank: int, 
-                                 file_path: str, commit_sha: str) -> str:
+                                 file_path: str, commit_sha: str, language: str = "python") -> str:
         """
         Format a single function section in the comment
         
@@ -209,6 +210,7 @@ class CommentGenerator:
             rank: Function rank (1-based)
             file_path: File path containing the function
             commit_sha: Git commit SHA
+            language: Programming language for syntax highlighting
             
         Returns:
             Markdown-formatted function section
@@ -218,6 +220,7 @@ class CommentGenerator:
         line_range = func_data.get('line_range', [0, 0])
         score = func_data.get('score', 0.0)
         snippet = func_data.get('snippet', '')
+        func_language = func_data.get('language', language)  # Use function's language if available
         
         # Build section
         section = f"\n#### {rank}. `{func_name}` in `{file_path}` (Score: {score:.2f})\n\n"
@@ -229,9 +232,9 @@ class CommentGenerator:
         else:
             section += f"**Lines {line_range[0]}-{line_range[1]}**\n\n"
         
-        # Add code snippet if available
+        # Add code snippet if available with language-specific syntax highlighting
         if snippet:
-            section += self._format_code_snippet(snippet, "python")
+            section += self._format_code_snippet(snippet, func_language)
             section += "\n"
         
         # Add explanation
@@ -287,12 +290,13 @@ class CommentGenerator:
             for file_data in top_files[:5]:  # Limit to top 5 files
                 file_path = file_data.get('file_path', '')
                 functions = file_data.get('functions', [])
+                file_language = file_data.get('language', 'python')  # Get language from file data
                 
                 # Add top function from each file (or multiple if same file)
                 for func in functions[:2]:  # Max 2 functions per file
                     if rank > 5:  # Overall limit of 5 functions
                         break
-                    comment += self._format_function_section(func, rank, file_path, commit_sha)
+                    comment += self._format_function_section(func, rank, file_path, commit_sha, file_language)
                     rank += 1
                 
                 if rank > 5:

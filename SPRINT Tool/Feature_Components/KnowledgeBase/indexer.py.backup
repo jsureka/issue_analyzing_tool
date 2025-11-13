@@ -84,23 +84,22 @@ class RepositoryIndexer:
     
     def _collect_source_files(self, repo_path: str) -> List[Path]:
         """Collect all supported source files in repository"""
-        import os
-        repo_path_obj = Path(repo_path)
+        repo_path = Path(repo_path)
         source_files = []
         
         # Exclude common directories
-        exclude_dirs = {'.git', '__pycache__', 'venv', 'env', '.venv', 'node_modules', 'build', 'dist', 'target', '.idea', 'out'}
+        exclude_dirs = {'.git', '__pycache__', 'venv', 'env', '.venv', 'node_modules', 'build', 'dist', 'target'}
         
         # Get supported extensions
         supported_extensions = self.parser_factory.get_supported_extensions()
         
         # Walk through repository
-        for root, dirs, files in os.walk(repo_path_obj):
+        for root, dirs, files in repo_path.walk():
             # Filter out excluded directories
             dirs[:] = [d for d in dirs if d not in exclude_dirs]
             
             for file in files:
-                file_path = Path(root) / file
+                file_path = root / file
                 # Check if file has supported extension
                 if any(file.endswith(ext) for ext in supported_extensions):
                     source_files.append(file_path)
@@ -131,19 +130,17 @@ class RepositoryIndexer:
         commit_sha = self._get_commit_sha(repo_path)
         logger.info(f"Commit SHA: {commit_sha}")
         
-        # Collect all supported source files
-        python_files = self._collect_source_files(repo_path)
+        # Find Python files
+        python_files = self._find_python_files(repo_path)
         if not python_files:
-            logger.warning("No supported source files found")
+            logger.warning("No Python files found")
             return IndexResult(
                 repo_name=repo_name,
                 commit_sha=commit_sha,
                 total_files=0,
                 total_functions=0,
-                total_windows=0,
                 index_path="",
                 metadata_path="",
-                window_index_path="",
                 graph_nodes=0,
                 graph_edges=0,
                 indexing_time_seconds=time.time() - start_time,
@@ -171,39 +168,20 @@ class RepositoryIndexer:
         
         repo_path_obj = Path(repo_path)
         
-        # Track language statistics
-        language_stats = {}
-        
-        for source_file in python_files:
+        for py_file in python_files:
             try:
-                # Detect language
-                language = self.language_detector.detect_language(str(source_file))
-                if language is None:
-                    logger.debug(f"Skipping unsupported file: {source_file}")
-                    continue
-                
-                # Track statistics
-                language_stats[language] = language_stats.get(language, 0) + 1
-                
-                # Get appropriate parser
-                parser = self.parser_factory.get_parser(str(source_file))
-                if parser is None:
-                    logger.warning(f"No parser available for {source_file}")
-                    failed_files.append(str(source_file))
-                    continue
-                
                 # Parse file
-                tree = parser.parse_file(str(source_file))
+                tree = self.parser.parse_file(str(py_file))
                 if tree is None:
-                    failed_files.append(str(source_file))
+                    failed_files.append(str(py_file))
                     continue
                 
                 # Read source code
-                with open(source_file, 'rb') as f:
+                with open(py_file, 'rb') as f:
                     source_code = f.read()
                 
                 # Get relative path
-                rel_path = source_file.relative_to(repo_path_obj)
+                rel_path = py_file.relative_to(repo_path_obj)
                 
                 # Create file node
                 file_id = self._generate_id(repo_name, str(rel_path))
@@ -216,13 +194,13 @@ class RepositoryIndexer:
                     file_id=file_id,
                     repo=repo_name,
                     path=str(rel_path),
-                    language=language,
+                    language="python",
                     lines_of_code=lines_of_code,
                     commit_sha=commit_sha
                 )
                 
                 # Extract classes
-                classes = parser.extract_classes(tree, source_code, str(source_file))
+                classes = self.parser.extract_classes(tree, source_code, str(py_file))
                 for cls in classes:
                     class_id = self._generate_id(repo_name, str(rel_path), cls.name)
                     self.graph_store.create_class_node(
@@ -231,16 +209,14 @@ class RepositoryIndexer:
                         file_id=file_id,
                         start_line=cls.start_line,
                         end_line=cls.end_line,
-                        repo=repo_name,
-                        language=cls.language,
-                        class_type=cls.class_type
+                        repo=repo_name
                     )
                     # Create CONTAINS relationship
                     self.graph_store.create_contains_relationship(file_id, class_id)
                     all_classes.append((cls, class_id, file_id, str(rel_path)))
                 
                 # Extract functions
-                functions = parser.extract_functions(tree, source_code, str(source_file))
+                functions = self.parser.extract_functions(tree, source_code, str(py_file))
                 for func in functions:
                     func_id = self._generate_id(repo_name, str(rel_path), func.name, str(func.start_line))
                     
@@ -261,8 +237,7 @@ class RepositoryIndexer:
                         end_line=func.end_line,
                         signature=func.signature,
                         docstring=func.docstring,
-                        repo=repo_name,
-                        language=func.language
+                        repo=repo_name
                     )
                     
                     # Create CONTAINS relationship
@@ -274,7 +249,7 @@ class RepositoryIndexer:
                     all_functions.append((func, func_id, file_id, str(rel_path)))
                 
                 # Extract calls and create relationships
-                calls_map = parser.extract_calls(tree, source_code)
+                calls_map = self.parser.extract_calls(tree, source_code)
                 for func_name, called_names in calls_map.items():
                     # Find function ID
                     caller_id = None
@@ -288,10 +263,8 @@ class RepositoryIndexer:
                             self.graph_store.create_calls_relationship(caller_id, called_name)
                 
             except Exception as e:
-                logger.error(f"Failed to process file {source_file}: {e}")
-                failed_files.append(str(source_file))
-        
-        logger.info(f"Indexed files by language: {language_stats}")
+                logger.error(f"Failed to process file {py_file}: {e}")
+                failed_files.append(str(py_file))
         
         logger.info(f"Parsed {len(python_files) - len(failed_files)} files successfully")
         logger.info(f"Extracted {len(all_functions)} functions")
@@ -317,8 +290,7 @@ class RepositoryIndexer:
                 'start_line': func.start_line,
                 'end_line': func.end_line,
                 'signature': func.signature,
-                'docstring': func.docstring,
-                'language': func.language
+                'docstring': func.docstring
             })
         
         if function_texts:
@@ -442,19 +414,17 @@ class RepositoryIndexer:
         commit_sha = self._get_commit_sha(repo_path)
         logger.info(f"Commit SHA: {commit_sha}")
         
-        # Collect all supported source files
-        python_files = self._collect_source_files(repo_path)
+        # Find Python files
+        python_files = self._find_python_files(repo_path)
         if not python_files:
-            logger.warning("No supported source files found")
+            logger.warning("No Python files found")
             return IndexResult(
                 repo_name=repo_name,
                 commit_sha=commit_sha,
                 total_files=0,
                 total_functions=0,
-                total_windows=0,
                 index_path="",
                 metadata_path="",
-                window_index_path="",
                 graph_nodes=0,
                 graph_edges=0,
                 indexing_time_seconds=time.time() - start_time,
@@ -484,21 +454,8 @@ class RepositoryIndexer:
         
         for py_file in python_files:
             try:
-                # Detect language
-                language = self.language_detector.detect_language(str(py_file))
-                if language is None:
-                    logger.debug(f"Skipping unsupported file: {py_file}")
-                    continue
-                
-                # Get appropriate parser
-                parser = self.parser_factory.get_parser(str(py_file))
-                if parser is None:
-                    logger.warning(f"No parser available for {py_file}")
-                    failed_files.append(str(py_file))
-                    continue
-                
                 # Parse file
-                tree = parser.parse_file(str(py_file))
+                tree = self.parser.parse_file(str(py_file))
                 if tree is None:
                     failed_files.append(str(py_file))
                     continue
@@ -508,14 +465,14 @@ class RepositoryIndexer:
                     source_code = f.read()
                 
                 # Extract functions
-                functions = parser.extract_functions(tree, source_code, str(py_file))
+                functions = self.parser.extract_functions(tree, source_code, str(py_file))
                 
                 # Extract classes
-                classes = parser.extract_classes(tree, source_code, str(py_file))
+                classes = self.parser.extract_classes(tree, source_code, str(py_file))
                 
                 # Extract imports and calls
-                imports = parser.extract_imports(tree, source_code)
-                calls = parser.extract_calls(tree, source_code)
+                imports = self.parser.extract_imports(tree, source_code)
+                calls = self.parser.extract_calls(tree, source_code)
                 
                 # Get relative path
                 rel_path = py_file.relative_to(repo_path_obj).as_posix()
@@ -528,8 +485,7 @@ class RepositoryIndexer:
                     'functions': functions,
                     'classes': classes,
                     'imports': imports,
-                    'calls': calls,
-                    'language': language
+                    'calls': calls
                 }
                 
                 all_functions.extend(functions)
@@ -642,9 +598,7 @@ class RepositoryIndexer:
                     file_id=file_id,
                     start_line=cls.start_line,
                     end_line=cls.end_line,
-                    repo=repo_name,
-                    language=cls.language,
-                    class_type=cls.class_type
+                    repo=repo_name
                 )
                 # Create CONTAINS relationship
                 self.graph_store.create_contains_relationship(file_id, class_id)
@@ -667,8 +621,7 @@ class RepositoryIndexer:
                     end_line=func.end_line,
                     signature=func.signature,
                     docstring=func.docstring,
-                    repo=repo_name,
-                    language=func.language
+                    repo=repo_name
                 )
                 
                 # Create CONTAINS relationship

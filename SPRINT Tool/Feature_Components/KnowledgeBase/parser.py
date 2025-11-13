@@ -4,8 +4,7 @@ Extracts functions, classes, imports, and call relationships from Python code
 """
 
 import logging
-from dataclasses import dataclass
-from typing import List, Optional, Dict, Tuple
+from typing import List, Optional, Dict
 from pathlib import Path
 
 try:
@@ -17,31 +16,12 @@ except ImportError:
         "Install with: pip install tree-sitter tree-sitter-python"
     )
 
+from .language_parser import LanguageParser, FunctionInfo, ClassInfo
+
 logger = logging.getLogger(__name__)
 
 
-@dataclass
-class FunctionInfo:
-    """Information about a function extracted from code"""
-    name: str
-    signature: str
-    start_line: int
-    end_line: int
-    docstring: Optional[str]
-    class_name: Optional[str]  # None if module-level function
-    body: str
-
-
-@dataclass
-class ClassInfo:
-    """Information about a class extracted from code"""
-    name: str
-    start_line: int
-    end_line: int
-    functions: List[str]  # List of function names in this class
-
-
-class PythonParser:
+class PythonParser(LanguageParser):
     """Parser for Python code using tree-sitter"""
     
     def __init__(self):
@@ -54,6 +34,10 @@ class PythonParser:
         except Exception as e:
             logger.error(f"Failed to initialize Python parser: {e}")
             raise
+    
+    def get_language_name(self) -> str:
+        """Return the language name"""
+        return "python"
     
     def parse_file(self, file_path: str) -> Optional[object]:
         """
@@ -168,7 +152,8 @@ class PythonParser:
                         end_line=end_line,
                         docstring=docstring,
                         class_name=class_name,
-                        body=body
+                        body=body,
+                        language="python"
                     )
                     functions.append(func_info)
                     
@@ -245,7 +230,9 @@ class PythonParser:
                         name=name,
                         start_line=start_line,
                         end_line=end_line,
-                        functions=function_names
+                        functions=function_names,
+                        language="python",
+                        class_type="class"
                     )
                     classes.append(class_info)
                     

@@ -127,7 +127,8 @@ class GraphStore:
             return False
     
     def create_class_node(self, class_id: str, name: str, file_id: str,
-                         start_line: int, end_line: int, repo: str) -> bool:
+                         start_line: int, end_line: int, repo: str,
+                         language: str = "python", class_type: str = "class") -> bool:
         """
         Create a class node in the graph
         
@@ -138,6 +139,8 @@ class GraphStore:
             start_line: Starting line number
             end_line: Ending line number
             repo: Repository name
+            language: Programming language (default: "python")
+            class_type: Type of class (class, interface, enum)
             
         Returns:
             True if successful
@@ -153,12 +156,15 @@ class GraphStore:
                     file_id: $file_id,
                     start_line: $start_line,
                     end_line: $end_line,
-                    repo: $repo
+                    repo: $repo,
+                    language: $language,
+                    class_type: $class_type
                 })
                 """
                 session.run(query,
                            class_id=class_id, name=name, file_id=file_id,
-                           start_line=start_line, end_line=end_line, repo=repo)
+                           start_line=start_line, end_line=end_line, repo=repo,
+                           language=language, class_type=class_type)
                 return True
         except Exception as e:
             logger.error(f"Failed to create class node: {e}")
@@ -166,7 +172,8 @@ class GraphStore:
     
     def create_function_node(self, function_id: str, name: str, file_id: str,
                            class_id: Optional[str], start_line: int, end_line: int,
-                           signature: str, docstring: Optional[str], repo: str) -> bool:
+                           signature: str, docstring: Optional[str], repo: str,
+                           language: str = "python") -> bool:
         """
         Create a function node in the graph
         
@@ -180,6 +187,7 @@ class GraphStore:
             signature: Function signature
             docstring: Function docstring
             repo: Repository name
+            language: Programming language (default: "python")
             
         Returns:
             True if successful
@@ -198,13 +206,15 @@ class GraphStore:
                     end_line: $end_line,
                     signature: $signature,
                     docstring: $docstring,
-                    repo: $repo
+                    repo: $repo,
+                    language: $language
                 })
                 """
                 session.run(query,
                            function_id=function_id, name=name, file_id=file_id,
                            class_id=class_id, start_line=start_line, end_line=end_line,
-                           signature=signature, docstring=docstring, repo=repo)
+                           signature=signature, docstring=docstring, repo=repo,
+                           language=language)
                 return True
         except Exception as e:
             logger.error(f"Failed to create function node: {e}")

@@ -99,11 +99,12 @@ The Knowledge Base System is a sophisticated bug localization platform that enha
 
 ### Phase 1: Foundation
 
-- ✅ Python code parsing with tree-sitter
+- ✅ Multi-language code parsing with tree-sitter (Python, Java)
 - ✅ Function-level embeddings (UniXcoder/GraphCodeBERT)
 - ✅ FAISS vector store for similarity search
 - ✅ Neo4j code knowledge graph
 - ✅ Dense retrieval with top-K results
+- ✅ Language-agnostic architecture
 
 ### Phase 2: SPRINT Integration
 
@@ -528,6 +529,133 @@ result = indexer.update_index("abc123", "def456")
 
 ---
 
+## Multi-Language Support
+
+### Supported Languages
+
+The Knowledge Base System supports multiple programming languages:
+
+| Language | Extensions | Parser             | Status             |
+| -------- | ---------- | ------------------ | ------------------ |
+| Python   | `.py`      | tree-sitter-python | ✅ Fully Supported |
+| Java     | `.java`    | tree-sitter-java   | ✅ Fully Supported |
+
+### Language Detection
+
+The system automatically detects the programming language based on file extension:
+
+```python
+from Feature_Components.KnowledgeBase.parser_factory import ParserFactory, LanguageDetector
+
+factory = ParserFactory()
+detector = LanguageDetector(factory)
+
+# Detect language
+language = detector.detect_language("Example.java")  # Returns "java"
+language = detector.detect_language("example.py")    # Returns "python"
+
+# Check if supported
+is_supported = detector.is_supported("example.js")   # Returns False
+```
+
+### Mixed-Language Repositories
+
+The system seamlessly handles repositories containing multiple programming languages:
+
+```python
+# Index a repository with both Python and Java files
+result = IndexRepository(
+    repo_path="/path/to/mixed-repo",
+    repo_name="owner/mixed-repo"
+)
+
+# Results include language statistics
+print(result['languages'])  # {'python': 150, 'java': 200}
+```
+
+### Language-Specific Features
+
+#### Syntax Highlighting
+
+GitHub comments automatically use language-specific syntax highlighting:
+
+````markdown
+#### 1. `processData` in `Processor.java`
+
+```java
+public Map<String, Object> processData(String input) {
+    Map<String, Object> result = new HashMap<>();
+    return result;
+}
+```
+````
+
+#### Java-Specific Parsing
+
+The Java parser extracts:
+
+- Methods from classes, interfaces, and enums
+- Javadoc comments as docstrings
+- Method signatures with modifiers and types
+- Import statements
+- Method invocation relationships
+
+Example:
+
+```java
+/**
+ * Process input data and return result
+ * @param input The input string
+ * @return Processed result map
+ */
+public Map<String, Object> processData(String input) {
+    // Method body
+}
+```
+
+### Adding New Languages
+
+To add support for a new language:
+
+1. **Install tree-sitter grammar**:
+
+   ```bash
+   pip install tree-sitter-javascript
+   ```
+
+2. **Create parser class**:
+
+   ```python
+   from Feature_Components.KnowledgeBase.language_parser import LanguageParser
+
+   class JavaScriptParser(LanguageParser):
+       def __init__(self):
+           self.language = Language(tsjavascript.language(), "javascript")
+           # Implement abstract methods
+   ```
+
+3. **Register in ParserFactory**:
+
+   ```python
+   # In parser_factory.py
+   self.register_parser("javascript", JavaScriptParser, [".js", ".jsx"])
+   ```
+
+4. **Update configuration**:
+
+   ```python
+   # In config.py
+   SUPPORTED_LANGUAGES['javascript'] = {
+       'extensions': ['.js', '.jsx'],
+       'parser': 'JavaScriptParser',
+       'syntax_highlight': 'javascript'
+   }
+   ```
+
+5. **Add tests** and documentation
+
+---
+
 ## Configuration
 
 ### Model Configuration
@@ -837,9 +965,17 @@ For issues and questions:
 - ✅ Phase 4: Confidence Calibration complete
 - ✅ Phase 5: Incremental Indexing foundation complete
 
+### Version 1.1.0 (Multi-Language Support)
+
+- ✅ Java language support added
+- ✅ Language-agnostic parser architecture
+- ✅ ParserFactory for automatic language detection
+- ✅ Language-specific syntax highlighting in comments
+- ✅ Mixed-language repository support
+
 ### Upcoming
 
 - Full incremental update implementation
-- Additional language support (Java, JavaScript)
+- Additional language support (JavaScript, TypeScript, C++)
 - Advanced graph-based retrieval
 - Fix generation capabilities

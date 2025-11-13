@@ -82,5 +82,6 @@ yarl==1.15.2
 zipp==3.20.2
 tree-sitter==0.21.3
 tree-sitter-python==0.21.0
+tree-sitter-java==0.21.0
 faiss-cpu==1.8.0
 neo4j==5.25.0

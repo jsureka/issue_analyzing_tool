@@ -32,3 +32,28 @@ MAX_FUNCTION_BODY_LENGTH = 2000
 
 # Logging Configuration
 LOG_LEVEL = os.getenv("KB_LOG_LEVEL", "INFO")
+
+# Language Configuration
+SUPPORTED_LANGUAGES = {
+    'python': {
+        'extensions': ['.py'],
+        'parser': 'PythonParser',
+        'syntax_highlight': 'python',
+        'description': 'Python programming language'
+    },
+    'java': {
+        'extensions': ['.java'],
+        'parser': 'JavaParser',
+        'syntax_highlight': 'java',
+        'description': 'Java programming language'
+    }
+}
+
+# Parser Configuration
+PARSER_SETTINGS = {
+    'skip_test_files': True,  # Skip *Test.java, test_*.py
+    'skip_generated_files': True,  # Skip files with @generated marker
+    'max_file_size_mb': 5,  # Skip files larger than 5MB
+    'exclude_dirs': {'.git', '__pycache__', 'venv', 'env', '.venv', 
+                     'node_modules', 'build', 'dist', 'target', 'out'}
+}
