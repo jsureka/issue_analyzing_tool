@@ -13,7 +13,7 @@
 
 ## SPRINT Tool Architecture
 
-The main application follows a modular component-based architecture:
+The main application follows a simplified, focused architecture:
 
 ```
 SPRINT Tool/
@@ -23,16 +23,15 @@ SPRINT Tool/
 ├── ngrok.exe                 # Tunneling executable
 ├── Data_Storage/             # Database operations
 │   └── dbOperations.py       # SQLite database management
-├── Feature_Components/       # Core ML feature implementations
-│   ├── dupBRDetection.py     # Duplicate issue detection
-│   ├── BRSeverityPred.py     # Severity prediction
-│   └── bugLocalization.py   # Bug localization
+├── Feature_Components/       # Knowledge Base bug localization
+│   ├── knowledgeBase.py      # KB-based bug localization
+│   └── KnowledgeBase/        # KB system implementation
 ├── GitHub_Event_Handler/     # GitHub integration layer
 │   ├── processIssueEvents.py    # Main event processing logic
 │   ├── app_authentication.py   # GitHub App authentication
-│   ├── createComment.py        # Issue comment creation
 │   ├── createCommentBugLocalization.py  # Bug localization comments
-│   └── getCodeFiles.py         # Repository file fetching
+│   ├── getCodeFiles.py         # Repository file fetching
+│   └── processPushEvents.py    # Push event handling for KB updates
 └── Issue_Indexer/           # Issue data management
     └── getAllIssues.py      # Repository issue fetching and indexing
 ```
@@ -47,54 +46,53 @@ SPRINT Tool/
 
 ### Feature_Components
 
-- **dupBRDetection.py**: Implements `DuplicateDetection()` API
-- **BRSeverityPred.py**: Implements `SeverityPrediction()` API
-- **bugLocalization.py**: Implements `BugLocalization()` API
-- Each component is self-contained with model loading and inference logic
+- **knowledgeBase.py**: Implements Knowledge Base bug localization using vector similarity search
+- **KnowledgeBase/**: Contains the KB system implementation with code parsing, indexing, and retrieval
 
 ### GitHub_Event_Handler
 
-- **processIssueEvents.py**: Orchestrates the entire workflow
+- **processIssueEvents.py**: Orchestrates the bug localization workflow
 - **app_authentication.py**: Manages GitHub App credentials and tokens
-- **createComment.py**: Handles standard issue comments
-- **createCommentBugLocalization.py**: Specialized bug localization output
+- **createCommentBugLocalization.py**: Creates bug localization comments
 - **getCodeFiles.py**: Repository file system traversal
+- **processPushEvents.py**: Handles push events to update Knowledge Base
 
 ### Issue_Indexer
 
 - Fetches existing repository issues during installation
 - Implements pagination for large repositories
-- Maintains local issue database for similarity comparison
+- Maintains local issue database
 
 ## Key Design Patterns
 
-### Modular Feature Architecture
+### Focused Single-Feature Architecture
 
-- Each ML feature is implemented as an independent component
-- Features expose simple function-based APIs
-- Easy to add new features by following existing patterns
+- Knowledge Base bug localization is the core feature
+- Simple function-based API for bug localization
+- Lightweight and efficient implementation
 
 ### Event-Driven Processing
 
 - GitHub webhooks trigger issue processing
 - ThreadPoolExecutor enables concurrent processing
-- Multiprocessing support for ML model inference
+- Push events trigger automatic Knowledge Base updates
 
-### Configuration-Based Models
+### Knowledge Base System
 
-- All model paths defined in `.env` file
-- Support for custom model replacement
-- Environment-specific configuration management
+- Vector similarity search using FAISS
+- Code parsing with tree-sitter
+- Graph database (Neo4j) for code relationships
+- Automatic indexing on repository installation
 
 ## File Naming Conventions
 
 - Snake_case for directories and Python files
 - Descriptive component names (e.g., `processIssueEvents.py`)
-- Feature-specific prefixes (e.g., `dupBRDetection.py` for duplicate detection)
+- Clear separation between event handling and feature logic
 
 ## Extension Points
 
-- Add new features in `Feature_Components/`
-- Integrate new features in `processIssueEvents.py`
-- Update environment configuration for new models
-- Follow existing API patterns for consistency
+- Enhance Knowledge Base system with additional language support
+- Improve vector search algorithms
+- Add more sophisticated code analysis features
+- Extend telemetry and monitoring capabilities

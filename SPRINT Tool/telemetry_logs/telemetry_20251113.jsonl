@@ -1,3 +1,0 @@
-{"type": "retrieval", "timestamp": "2025-11-13T17:19:54.735820Z", "issue_id": "test", "latency_ms": 1000.0, "top_k": 5, "confidence": "high", "repo_name": "test/repo", "success": true}
-{"type": "retrieval", "timestamp": "2025-11-13T17:23:01.885069Z", "issue_id": "test-123", "latency_ms": 1500.0, "top_k": 5, "confidence": "medium", "repo_name": "test/repo", "success": true}
-{"type": "retrieval", "timestamp": "2025-11-13T17:26:38.416888Z", "issue_id": "test-123", "latency_ms": 1500.0, "top_k": 5, "confidence": "medium", "repo_name": "test/repo", "success": true}

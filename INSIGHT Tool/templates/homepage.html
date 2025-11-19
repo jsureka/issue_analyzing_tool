@@ -1,0 +1,542 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="INSIGHT - Issue Analyzing Tool for automated bug localization in GitHub repositories"
+    />
+    <meta
+      name="keywords"
+      content="GitHub, bug localization, issue analysis, automated testing, machine learning"
+    />
+    <title>INSIGHT - Issue Analyzing Tool</title>
+    <link
+      rel="stylesheet"
+      href="{{ url_for('static', filename='css/style.css') }}"
+    />
+    <link
+      rel="stylesheet"
+      href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism.min.css"
+    />
+  </head>
+  <body>
+    <header class="header">
+      <div class="container">
+        <div class="header-content">
+          <img
+            src="{{ url_for('static', filename='images/logo.png') }}"
+            alt="INSIGHT Logo"
+            class="logo"
+          />
+          <h1>INSIGHT</h1>
+          <p class="tagline">Issue Analyzing Tool</p>
+        </div>
+        <nav class="nav">
+          <a href="#introduction">About</a>
+          <a href="#features">Features</a>
+          <a href="#architecture">Architecture</a>
+          <a href="#usage">Usage</a>
+          <a href="#api">API</a>
+        </nav>
+      </div>
+    </header>
+
+    <main>
+      <section id="introduction" class="section intro-section">
+        <div class="container">
+          <h2>What is INSIGHT?</h2>
+          <p class="intro-text">
+            INSIGHT is an open-source GitHub application that acts as an issue
+            management assistant for developers, project managers, computer
+            science students, and educators. INSIGHT provides automated bug
+            localization assistance using advanced machine learning and semantic
+            code search.
+          </p>
+          <div class="install-cta">
+            <a
+              href="https://github.com/apps/insight-issue-analyzing-tool"
+              class="btn-primary"
+              target="_blank"
+            >
+              Install INSIGHT on GitHub
+            </a>
+          </div>
+        </div>
+      </section>
+
+      <section id="features" class="section features-section">
+        <div class="container">
+          <h2>Core Features</h2>
+          <div class="features-grid">
+            <div class="feature-card">
+              <div class="feature-icon">🔍</div>
+              <h3>Similar Issue Detection</h3>
+              <p>
+                Identifies duplicate issues by analyzing textual similarity
+                using advanced NLP models. INSIGHT automatically labels
+                potential duplicates and provides links to similar issues.
+              </p>
+            </div>
+            <div class="feature-card">
+              <div class="feature-icon">⚠️</div>
+              <h3>Severity Prediction</h3>
+              <p>
+                Classifies reported issues into five severity levels: Blocker,
+                Critical, Major, Minor, or Trivial. Helps teams prioritize work
+                and allocate resources effectively.
+              </p>
+            </div>
+            <div class="feature-card">
+              <div class="feature-icon">🎯</div>
+              <h3>Bug Localization</h3>
+              <p>
+                Predicts which code files likely need modification to resolve
+                the issue using Knowledge Base vector similarity search.
+                Supports Python and Java with extensible architecture.
+              </p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="architecture" class="section architecture-section">
+        <div class="container">
+          <h2>System Architecture</h2>
+          <p class="section-intro">
+            INSIGHT is built using Python's Flask framework with a modular,
+            event-driven architecture that processes GitHub webhooks and
+            provides real-time analysis.
+          </p>
+          <div class="architecture-diagram">
+            <img
+              src="{{ url_for('static', filename='images/architecture.png') }}"
+              alt="INSIGHT Architecture Diagram"
+            />
+          </div>
+          <div class="architecture-components">
+            <div class="component">
+              <h4>Issue Indexer</h4>
+              <p>
+                Fetches and stores existing issues in a local database for
+                efficient access and analysis.
+              </p>
+            </div>
+            <div class="component">
+              <h4>GitHub Event Listener</h4>
+              <p>
+                Monitors new issues using GitHub Webhooks and processes them in
+                real-time.
+              </p>
+            </div>
+            <div class="component">
+              <h4>Knowledge Base System</h4>
+              <p>
+                Multi-language code parsing with FAISS vector search and Neo4j
+                graph database for code relationships.
+              </p>
+            </div>
+            <div class="component">
+              <h4>Issue Management Component</h4>
+              <p>
+                Performs duplicate detection, severity prediction, and bug
+                localization using ML models.
+              </p>
+            </div>
+          </div>
+          <div class="tech-stack">
+            <h3>Technology Stack</h3>
+            <ul>
+              <li>
+                <strong>Flask</strong> - Web framework for webhook handling
+              </li>
+              <li>
+                <strong>FAISS</strong> - CPU-based vector similarity search
+              </li>
+              <li>
+                <strong>Neo4j</strong> - Graph database for code relationships
+              </li>
+              <li>
+                <strong>tree-sitter</strong> - Code parsing for Python and Java
+              </li>
+              <li>
+                <strong>PyTorch & Transformers</strong> - ML model inference
+              </li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <section id="usage" class="section usage-section">
+        <div class="container">
+          <h2>How to Run INSIGHT Locally</h2>
+          <p class="section-intro">
+            Follow these steps to set up and run INSIGHT on your local machine
+            with ngrok tunneling for GitHub webhook integration.
+          </p>
+
+          <div class="setup-steps">
+            <div class="step">
+              <h3>Step 1: Clone the Repository</h3>
+              <pre><code class="language-bash">git clone https://github.com/your-repo/insight-tool.git
+cd insight-tool</code></pre>
+            </div>
+
+            <div class="step">
+              <h3>Step 2: Install Dependencies</h3>
+              <pre><code class="language-bash">cd "INSIGHT Tool"
+pip install -r requirements.txt</code></pre>
+            </div>
+
+            <div class="step">
+              <h3>Step 3: Configure Environment Variables</h3>
+              <p>
+                Create a <code>.env</code> file in the INSIGHT Tool directory
+                with the following variables:
+              </p>
+              <pre><code class="language-bash">GITHUB_PRIVATE_KEY=your_github_app_private_key
+GITHUB_APP_ID=your_github_app_id
+CLIENT_ID=your_github_client_id
+POOL_PROCESSOR_MAX_WORKERS=4</code></pre>
+            </div>
+
+            <div class="step">
+              <h3>Step 4: Configure ngrok</h3>
+              <p>
+                Install ngrok from
+                <a href="https://ngrok.com/download" target="_blank"
+                  >ngrok.com/download</a
+                >
+                and configure your authentication token:
+              </p>
+              <pre><code class="language-bash">ngrok config add-authtoken YOUR_NGROK_TOKEN</code></pre>
+            </div>
+
+            <div class="step">
+              <h3>Step 5: Start ngrok Tunnel</h3>
+              <p>Open a terminal and start the ngrok tunnel on port 5000:</p>
+              <pre><code class="language-bash">ngrok http 5000</code></pre>
+              <p>
+                Copy the forwarding URL (e.g.,
+                <code>https://xxxx-xx-xx-xx-xx.ngrok.io</code>)
+              </p>
+            </div>
+
+            <div class="step">
+              <h3>Step 6: Start Flask Application</h3>
+              <p>Open a second terminal and start the Flask application:</p>
+              <pre><code class="language-bash">cd "INSIGHT Tool"
+python main.py</code></pre>
+            </div>
+
+            <div class="step">
+              <h3>Step 7: Configure GitHub Webhook</h3>
+              <p>
+                In your GitHub repository, go to
+                <strong>Settings → Webhooks → Add Webhook</strong>
+              </p>
+              <ul>
+                <li>
+                  <strong>Payload URL:</strong> Paste your ngrok forwarding URL
+                </li>
+                <li><strong>Content type:</strong> application/json</li>
+                <li>
+                  <strong>Events:</strong> Select "Issues", "Issue comments",
+                  and "Push events"
+                </li>
+              </ul>
+            </div>
+
+            <div class="step">
+              <h3>Step 8: Test INSIGHT</h3>
+              <p>
+                Create a new issue in your GitHub repository and watch INSIGHT
+                analyze it automatically!
+              </p>
+            </div>
+          </div>
+
+          <div class="troubleshooting">
+            <h3>Troubleshooting Tips</h3>
+            <ul>
+              <li>
+                <strong>ngrok URL changes:</strong> Free ngrok URLs change on
+                restart. Update your GitHub webhook URL accordingly.
+              </li>
+              <li>
+                <strong>Port already in use:</strong> Make sure no other
+                application is running on port 5000.
+              </li>
+              <li>
+                <strong>Webhook not triggering:</strong> Check that your ngrok
+                tunnel is active and the URL is correctly configured in GitHub.
+              </li>
+              <li>
+                <strong>Authentication errors:</strong> Verify your GitHub App
+                credentials in the .env file.
+              </li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <section id="api" class="section api-section">
+        <div class="container">
+          <h2>API Documentation</h2>
+          <p class="section-intro">
+            INSIGHT provides three feature APIs that can be integrated into your
+            own projects. Each API is implemented as a Python function.
+          </p>
+
+          <div class="api-endpoint">
+            <h3>1. Duplicate Issue Detection</h3>
+            <div class="api-details">
+              <h4>Function Signature</h4>
+              <pre><code class="language-python">DuplicateDetection(sent1, sent2, issue_id)</code></pre>
+
+              <h4>Purpose</h4>
+              <p>
+                Compares a new issue with an existing one to detect duplicates
+                based on textual similarity.
+              </p>
+
+              <h4>Parameters</h4>
+              <ul>
+                <li>
+                  <code>sent1</code> (String): The title or description of the
+                  new issue
+                </li>
+                <li>
+                  <code>sent2</code> (String): The title or description of the
+                  existing issue to compare against
+                </li>
+                <li>
+                  <code>issue_id</code> (Integer): The ID of the issue being
+                  compared
+                </li>
+              </ul>
+
+              <h4>Returns</h4>
+              <p>
+                <strong>Integer:</strong> <code>1</code> for duplicate,
+                <code>0</code> for not duplicate
+              </p>
+
+              <h4>Example Usage</h4>
+              <pre><code class="language-python">from Feature_Components.duplicateDetection import DuplicateDetection
+
+new_issue = "Application crashes on startup"
+existing_issue = "App fails to launch on Windows"
+issue_id = 123
+
+result = DuplicateDetection(new_issue, existing_issue, issue_id)
+if result == 1:
+    print("Duplicate issue detected!")
+else:
+    print("Not a duplicate")</code></pre>
+
+              <h4>Configuration</h4>
+              <p>Set the model path in your <code>.env</code> file:</p>
+              <pre><code class="language-bash">DUPLICATE_BR_MODEL_PATH=/path/to/model</code></pre>
+            </div>
+          </div>
+
+          <div class="api-endpoint">
+            <h3>2. Severity Prediction</h3>
+            <div class="api-details">
+              <h4>Function Signature</h4>
+              <pre><code class="language-python">SeverityPrediction(input_text)</code></pre>
+
+              <h4>Purpose</h4>
+              <p>
+                Predicts the severity level of a reported issue based on its
+                textual content.
+              </p>
+
+              <h4>Parameters</h4>
+              <ul>
+                <li>
+                  <code>input_text</code> (String): The combined title and
+                  description of the issue
+                </li>
+              </ul>
+
+              <h4>Returns</h4>
+              <p>
+                <strong>String:</strong> One of <code>Blocker</code>,
+                <code>Critical</code>, <code>Major</code>, <code>Minor</code>,
+                or <code>Trivial</code>
+              </p>
+
+              <h4>Example Usage</h4>
+              <pre><code class="language-python">from Feature_Components.severityPrediction import SeverityPrediction
+
+issue_text = "Database connection fails causing complete system shutdown"
+severity = SeverityPrediction(issue_text)
+print(f"Predicted severity: {severity}")  # Output: "Critical"</code></pre>
+
+              <h4>Configuration</h4>
+              <p>Set the model path in your <code>.env</code> file:</p>
+              <pre><code class="language-bash">SEVERITY_PREDICTION_MODEL_PATH=/path/to/model</code></pre>
+            </div>
+          </div>
+
+          <div class="api-endpoint">
+            <h3>3. Bug Localization</h3>
+            <div class="api-details">
+              <h4>Function Signature</h4>
+              <pre><code class="language-python">BugLocalization(issue_data, repo_full_name, code_files_list)</code></pre>
+
+              <h4>Purpose</h4>
+              <p>
+                Predicts the most likely buggy code files that might require
+                modification to fix the issue using Knowledge Base vector
+                similarity search.
+              </p>
+
+              <h4>Parameters</h4>
+              <ul>
+                <li>
+                  <code>issue_data</code> (String): The combined title and
+                  description of the issue
+                </li>
+                <li>
+                  <code>repo_full_name</code> (String): The repository's full
+                  name (e.g., "org/repo")
+                </li>
+                <li>
+                  <code>code_files_list</code> (List of Strings): Paths to all
+                  code files in the repository
+                </li>
+              </ul>
+
+              <h4>Returns</h4>
+              <p>
+                <strong>List of Strings:</strong> File paths for the top 5-6
+                predicted buggy files
+              </p>
+
+              <h4>Example Usage</h4>
+              <pre><code class="language-python">from Feature_Components.knowledgeBase import BugLocalization
+
+issue_text = "Login authentication fails with invalid token error"
+repo_name = "myorg/myrepo"
+code_files = ["src/auth.py", "src/token.py", "src/user.py"]
+
+buggy_files = BugLocalization(issue_text, repo_name, code_files)
+print("Predicted buggy files:")
+for file in buggy_files:
+    print(f"  - {file}")</code></pre>
+
+              <h4>Configuration</h4>
+              <p>Set the model path in your <code>.env</code> file:</p>
+              <pre><code class="language-bash">BUGLOCALIZATION_MODEL_PATH=/path/to/model</code></pre>
+            </div>
+          </div>
+
+          <div class="api-notes">
+            <h3>General Notes</h3>
+            <ul>
+              <li>
+                All features use pre-trained models. Download models from the
+                <a
+                  href="https://drive.google.com/drive/folders/1IQdWRwUKVGmU-8p4PNbWd4vTxIAuaoNY"
+                  target="_blank"
+                  >Google Drive link</a
+                >
+              </li>
+              <li>
+                INSIGHT supports custom models - simply update the model paths
+                in your <code>.env</code> file
+              </li>
+              <li>
+                The Knowledge Base system uses CPU-based vector search (no GPU
+                required)
+              </li>
+              <li>
+                For multi-language support, the system currently supports Python
+                and Java with extensible architecture
+              </li>
+            </ul>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <div class="container">
+        <div class="footer-content">
+          <div class="footer-section">
+            <h4>About INSIGHT</h4>
+            <p>
+              An open-source GitHub application for automated bug localization
+              and issue management assistance.
+            </p>
+          </div>
+
+          <div class="footer-section">
+            <h4>Contributors</h4>
+            <ul class="contributors-list">
+              <li>
+                <a href="https://github.com/adnan23062000" target="_blank"
+                  >Ahmed Adnan</a
+                >
+                - bsse1131@iit.du.ac.bd
+              </li>
+              <li>
+                <a href="https://github.com/antu-saha" target="_blank"
+                  >Antu Saha</a
+                >
+                - asaha02@wm.edu
+              </li>
+              <li>Oscar Chaparro - oscarch@wm.edu</li>
+            </ul>
+          </div>
+
+          <div class="footer-section">
+            <h4>Links</h4>
+            <ul class="footer-links">
+              <li>
+                <a
+                  href="https://github.com/sea-lab-wm/sprint_issue_report_assistant_tool"
+                  target="_blank"
+                  >GitHub Repository</a
+                >
+              </li>
+              <li>
+                <a
+                  href="https://github.com/apps/insight-issue-analyzing-tool"
+                  target="_blank"
+                  >Install INSIGHT</a
+                >
+              </li>
+              <li>
+                <a
+                  href="https://github.com/sea-lab-wm/sprint_issue_report_assistant_tool/issues"
+                  target="_blank"
+                  >Report Issues</a
+                >
+              </li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="footer-bottom">
+          <p>
+            &copy; 2024 INSIGHT - Issue Analyzing Tool. Open source project
+            licensed under MIT License.
+          </p>
+          <p>
+            We welcome contributions! Feel free to open issues or pull requests
+            on our GitHub repository.
+          </p>
+        </div>
+      </div>
+    </footer>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-python.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-bash.min.js"></script>
+  </body>
+</html>

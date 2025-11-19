@@ -1,12 +1,10 @@
 # SPRINT Product Overview
 
-SPRINT (iSsue rePoRt assIstaNT) is an open-source GitHub application that provides automated issue management assistance for software development teams.
+SPRINT (iSsue rePoRt assIstaNT) is an open-source GitHub application that provides automated bug localization assistance for software development teams.
 
-## Core Features
+## Core Feature
 
-1. **Similar Issue Detection** - Identifies duplicate issues using textual similarity analysis
-2. **Severity Prediction** - Classifies issues into five severity levels (Blocker, Critical, Major, Minor, Trivial)
-3. **Bug Localization** - Predicts code files that likely need modification to resolve the issue
+**Knowledge Base Bug Localization** - Uses vector similarity search and code analysis to predict which code files likely need modification to resolve reported issues. The system builds a knowledge base of the repository's code structure and uses semantic search to find relevant files and functions.
 
 ## Target Users
 
@@ -16,4 +14,4 @@ SPRINT (iSsue rePoRt assIstaNT) is an open-source GitHub application that provid
 
 ## Integration
 
-SPRINT operates as a GitHub App that monitors repository webhooks and automatically processes new issues, providing comments and labels based on ML model predictions.
+SPRINT operates as a GitHub App that monitors repository webhooks and automatically processes new issues, providing bug localization predictions through issue comments.
