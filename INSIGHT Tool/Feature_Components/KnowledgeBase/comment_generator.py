@@ -74,7 +74,7 @@ class CommentGenerator:
         return self._get_confidence_badge(confidence, score)
     
     def _generate_github_permalink(self, file_path: str, start_line: int, 
-                                   end_line: int, commit_sha: str) -> str:
+                                   end_line: int, ref: str) -> str:
         """
         Generate GitHub permalink URL with line ranges
         
@@ -82,7 +82,7 @@ class CommentGenerator:
             file_path: Relative file path
             start_line: Starting line number
             end_line: Ending line number
-            commit_sha: Git commit SHA
+            ref: Git reference (branch or commit SHA)
             
         Returns:
             GitHub permalink URL
@@ -90,7 +90,7 @@ class CommentGenerator:
         if not self.repo_owner or not self.repo_name:
             return ""
         
-        base_url = f"https://github.com/{self.repo_owner}/{self.repo_name}/blob/{commit_sha}/{file_path}"
+        base_url = f"https://github.com/{self.repo_owner}/{self.repo_name}/blob/{ref}/{file_path}"
         
         if start_line == end_line:
             return f"{base_url}#L{start_line}"
@@ -259,6 +259,7 @@ class CommentGenerator:
             # Extract data
             repo_name = results.get('repository', 'unknown')
             commit_sha = results.get('commit_sha', 'HEAD')
+            branch = results.get('branch', 'main') # Get branch
             timestamp = results.get('timestamp', datetime.utcnow().isoformat() + 'Z')
             total_results = results.get('total_results', 0)
             top_files = results.get('top_files', [])
@@ -279,28 +280,35 @@ class CommentGenerator:
                 comment += "*Fine-grained analysis pinpointing specific line ranges:*\n\n"
                 
                 for i, line_result in enumerate(line_level_results[:3], 1):  # Top 3 line-level
-                    comment += self._format_line_level_section(line_result, i, commit_sha)
+                    comment += self._format_line_level_section(line_result, i, branch)
                 
                 comment += "\n---\n\n"
             
-            # Add top candidate functions (limit to top 5)
+            # Add top candidate functions (limit to top 3)
             comment += "### Top Candidate Functions\n"
             
-            rank = 1
-            for file_data in top_files[:5]:  # Limit to top 5 files
+            # Flatten functions from all files
+            all_functions = []
+            for file_data in top_files:
                 file_path = file_data.get('file_path', '')
-                functions = file_data.get('functions', [])
-                file_language = file_data.get('language', 'python')  # Get language from file data
+                file_language = file_data.get('language', 'python')
+                for func in file_data.get('functions', []):
+                    func['file_path'] = file_path # Ensure file path is available
+                    func['language'] = file_language
+                    all_functions.append(func)
+            
+            # Sort by score descending
+            all_functions.sort(key=lambda x: x.get('score', 0), reverse=True)
+            
+            # Take top 3
+            rank = 1
+            for func in all_functions[:3]:
+                file_path = func.get('file_path', '')
+                # Use file language if function language is not specific
+                func_language = func.get('language', 'python')
                 
-                # Add top function from each file (or multiple if same file)
-                for func in functions[:2]:  # Max 2 functions per file
-                    if rank > 5:  # Overall limit of 5 functions
-                        break
-                    comment += self._format_function_section(func, rank, file_path, commit_sha, file_language)
-                    rank += 1
-                
-                if rank > 5:
-                    break
+                comment += self._format_function_section(func, rank, file_path, branch, func_language)
+                rank += 1
             
             # Add summary section
             comment += "\n---\n\n### Summary\n\n"

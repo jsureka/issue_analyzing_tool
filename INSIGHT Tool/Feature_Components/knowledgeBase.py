@@ -21,68 +21,94 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Global instances (lazy loaded)
+import threading
+
+# Global instances (lazy loaded) with locks
 _embedder = None
+_embedder_lock = threading.Lock()
+
 _issue_processor = None
+_issue_processor_lock = threading.Lock()
+
 _retriever = None
+_retriever_lock = threading.Lock()
+
 _formatter = None
+_formatter_lock = threading.Lock()
+
 _line_reranker = None
+_line_reranker_lock = threading.Lock()
+
 _calibrator = None
+_calibrator_lock = threading.Lock()
 
 
 def _get_embedder(model_name: str = "microsoft/unixcoder-base") -> CodeEmbedder:
-    """Get or create embedder instance"""
+    """Get or create embedder instance (Thread-Safe)"""
     global _embedder
     if _embedder is None:
-        _embedder = CodeEmbedder(model_name)
-        _embedder.load_model()
+        with _embedder_lock:
+            if _embedder is None:
+                _embedder = CodeEmbedder(model_name)
+                _embedder.load_model()
     return _embedder
 
 
 def _get_issue_processor() -> IssueProcessor:
-    """Get or create issue processor instance"""
+    """Get or create issue processor instance (Thread-Safe)"""
     global _issue_processor
     if _issue_processor is None:
-        embedder = _get_embedder()
-        _issue_processor = IssueProcessor(embedder)
+        with _issue_processor_lock:
+            if _issue_processor is None:
+                embedder = _get_embedder()
+                _issue_processor = IssueProcessor(embedder)
     return _issue_processor
 
 
 def _get_retriever() -> DenseRetriever:
-    """Get or create retriever instance"""
+    """Get or create retriever instance (Thread-Safe)"""
     global _retriever
     if _retriever is None:
-        _retriever = DenseRetriever()
+        with _retriever_lock:
+            if _retriever is None:
+                _retriever = DenseRetriever()
     return _retriever
 
 
 def _get_formatter() -> ResultFormatter:
-    """Get or create formatter instance"""
+    """Get or create formatter instance (Thread-Safe)"""
     global _formatter
     if _formatter is None:
-        _formatter = ResultFormatter()
+        with _formatter_lock:
+            if _formatter is None:
+                _formatter = ResultFormatter()
     return _formatter
 
 
 def _get_line_reranker() -> LineReranker:
-    """Get or create line reranker instance"""
+    """Get or create line reranker instance (Thread-Safe)"""
     global _line_reranker
     if _line_reranker is None:
-        _line_reranker = LineReranker()
+        with _line_reranker_lock:
+            if _line_reranker is None:
+                _line_reranker = LineReranker()
     return _line_reranker
 
 
 def _get_calibrator() -> ConfidenceCalibrator:
-    """Get or create calibrator instance"""
+    """Get or create calibrator instance (Thread-Safe)"""
     global _calibrator
     if _calibrator is None:
-        _calibrator = ConfidenceCalibrator()
+        with _calibrator_lock:
+            if _calibrator is None:
+                _calibrator = ConfidenceCalibrator()
     return _calibrator
 
 
 def BugLocalization(issue_title: str, issue_body: str, repo_owner: str, 
                    repo_name: str, repo_path: str, commit_sha: str = None,
-                   k: int = 10, enable_line_level: bool = True) -> Dict[str, Any]:
+                   k: int = 10, enable_line_level: bool = True,
+                   default_branch: str = 'main') -> Dict[str, Any]:
     """
     Main API function for bug localization using Knowledge Base System
     
@@ -93,6 +119,7 @@ def BugLocalization(issue_title: str, issue_body: str, repo_owner: str,
         repo_name: Repository name
         repo_path: Local path to cloned repository
         k: Number of top results to return
+        default_branch: Default branch name for GitHub links
         
     Returns:
         Dictionary with top files and functions, or error information
@@ -200,14 +227,15 @@ def BugLocalization(issue_title: str, issue_body: str, repo_owner: str,
         # Format results
         repo_info = {
             'repo_name': full_repo_name,
-            'commit_sha': commit_sha
+            'commit_sha': commit_sha,
+            'branch': default_branch
         }
         
         formatted_results = formatter.format_results(
             results,
             repo_info,
             repo_path=repo_path,
-            top_n=5
+            top_n=10
         )
         
         # Add line-level results if available

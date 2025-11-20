@@ -105,6 +105,7 @@ class ResultFormatter:
             
             if not full_path.exists():
                 logger.warning(f"File not found: {full_path}")
+                print(f"DEBUG: Snippet extraction failed - File not found: {full_path}")
                 return ""
             
             # Read file
@@ -132,7 +133,7 @@ class ResultFormatter:
             return ""
 
     def format_results(self, retrieval_results: List, repo_info: Dict[str, Any], 
-                      repo_path: str = "", top_n: int = 5) -> Dict[str, Any]:
+                      repo_path: str = "", top_n: int = 10) -> Dict[str, Any]:
         """
         Format retrieval results as JSON for SPRINT
         

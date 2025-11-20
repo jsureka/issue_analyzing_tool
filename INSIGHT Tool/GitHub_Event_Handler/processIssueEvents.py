@@ -1,27 +1,34 @@
+import logging
+import time
+import os
+import subprocess
+import tempfile
+from config import Config as config
 from Issue_Indexer.getAllIssues import fetch_repository_issues
 from .getCodeFiles import fetch_all_code_files
-from .createCommentBugLocalization import CreateCommentBL, BLStartingCommentForWaiting
+from .createCommentBugLocalization import CreateCommentBL, BLStartingCommentForWaiting, CreateErrorComment
 from .app_authentication import authenticate_github_app
 from Feature_Components.knowledgeBase import BugLocalization as KBBugLocalization, GetIndexStatus
 from Data_Storage.dbOperations import create_table_if_not_exists, is_table_exists, insert_issue_to_db, delete_issue_from_db
 from Feature_Components.KnowledgeBase.telemetry import get_telemetry_logger
 from Feature_Components.KnowledgeBase.auto_labeler import AutoLabeler
 
+logger = logging.getLogger(__name__)
+
 def process_issue_event(repo_full_name, input_issue, action):
-    import time
     start_time_total = time.time()
     
     try:    
         if action == 'opened':
             # Ensure table exists and fetch historical issues for installation
             if not is_table_exists(repo_full_name):
-                print(f"Table for {repo_full_name} does not exist. Creating the table and fetching issues.")
+                logger.info(f"Table for {repo_full_name} does not exist. Creating the table and fetching issues.")
                 create_table_if_not_exists(repo_full_name)
 
                 issues_data = fetch_repository_issues(repo_full_name)
                 for issue in issues_data:
                     if issue['number'] == input_issue['issue_number']:
-                        print(f"Skipping issue {issue['number']} as it matches the input issue.")
+                        logger.info(f"Skipping issue {issue['number']} as it matches the input issue.")
                         continue  
 
                     issue_id = issue['number']
@@ -53,7 +60,7 @@ def process_issue_event(repo_full_name, input_issue, action):
                     input_issue['issue_labels']
                 )
             except Exception as e:
-                print(f"An error occurred while inserting the issue: {e}")
+                logger.error(f"An error occurred while inserting the issue: {e}")
 
             # Get authentication token
             auth_token = authenticate_github_app(repo_full_name)
@@ -68,18 +75,18 @@ def process_issue_event(repo_full_name, input_issue, action):
                 
                 if index_status.get('indexed', False):
                     # Use Knowledge Base system
-                    # Get repository path from code_files fetch
-                    import tempfile
-                    import os
-                    import time
-                    repo_path = os.path.join(tempfile.gettempdir(), 'sprint_repos', repo_full_name)
+                    # Sync repository to ensure files are present for snippet extraction
+                    from .repository_sync import RepositorySync
                     
-                    # Extract commit_sha from issue branch or use HEAD
-                    commit_sha = input_issue.get('commit_sha', None)
-                    if not commit_sha:
-                        # Try to get commit SHA from repository
-                        try:
-                            import subprocess
+                    try:
+                        sync = RepositorySync(config.REPO_STORAGE_PATH)
+                        commit_sha = input_issue.get('commit_sha')
+                        
+                        # Sync repository (clones if missing, updates if present)
+                        repo_path = sync.sync_repository(repo_full_name, commit_sha)
+                        
+                        # If commit_sha was not provided, get the one we synced to
+                        if not commit_sha:
                             result = subprocess.run(
                                 ['git', 'rev-parse', 'HEAD'],
                                 cwd=repo_path,
@@ -89,9 +96,15 @@ def process_issue_event(repo_full_name, input_issue, action):
                             )
                             if result.returncode == 0:
                                 commit_sha = result.stdout.strip()
-                        except Exception as e:
-                            print(f"Could not get commit SHA: {e}")
-                            commit_sha = None
+                                logger.info(f"Resolved commit SHA to {commit_sha}")
+                            else:
+                                logger.warning("Failed to resolve commit SHA after sync")
+                                
+                    except Exception as e:
+                        logger.error(f"Failed to sync repository: {e}")
+                        # Fallback to temp if sync fails
+                        repo_path = os.path.join(tempfile.gettempdir(), 'sprint_repos', repo_full_name)
+                        commit_sha = None
                     
                     # Start timing for telemetry
                     start_time = time.time()
@@ -103,7 +116,8 @@ def process_issue_event(repo_full_name, input_issue, action):
                         repo_name,
                         repo_path,
                         commit_sha=commit_sha,
-                        k=10
+                        k=10,
+                        default_branch=input_issue['issue_branch']
                     )
                     
                     # Calculate latency
@@ -136,7 +150,7 @@ def process_issue_event(repo_full_name, input_issue, action):
                     else:
                         # Fallback to empty list if KB fails
                         error_msg = kb_results.get('error', 'No results')
-                        print(f"Knowledge Base retrieval failed or returned no results: {error_msg}")
+                        logger.warning(f"Knowledge Base retrieval failed or returned no results: {error_msg}")
                         buggy_code_files_list = []
                         
                         # Log failed retrieval
@@ -156,9 +170,12 @@ def process_issue_event(repo_full_name, input_issue, action):
                                 'repo': repo_full_name
                             }
                         )
+                        
+                        # Notify user about the failure
+                        CreateErrorComment(repo_full_name, input_issue['issue_number'], error_msg)
                 else:
                     # Repository not indexed, return message
-                    print(f"Repository {repo_full_name} is not indexed. Skipping bug localization.")
+                    logger.info(f"Repository {repo_full_name} is not indexed. Skipping bug localization.")
                     buggy_code_files_list = []
                 
                 if buggy_code_files_list:
@@ -191,11 +208,11 @@ def process_issue_event(repo_full_name, input_issue, action):
             
             # Log end-to-end latency
             total_latency_seconds = time.time() - start_time_total
-            print(f"End-to-end processing time: {total_latency_seconds:.2f}s")
+            logger.info(f"End-to-end processing time: {total_latency_seconds:.2f}s")
             
             # Alert if latency exceeds threshold
             if total_latency_seconds > 10:
-                print(f"⚠️ WARNING: End-to-end latency ({total_latency_seconds:.2f}s) exceeded 10 second threshold!")
+                logger.warning(f"⚠️ WARNING: End-to-end latency ({total_latency_seconds:.2f}s) exceeded 10 second threshold!")
                 telemetry = get_telemetry_logger()
                 telemetry.log_error(
                     error_type='latency_threshold_exceeded',
@@ -209,9 +226,9 @@ def process_issue_event(repo_full_name, input_issue, action):
         
         elif action == 'deleted':
             delete_issue_from_db(repo_full_name, input_issue['issue_number'])
-            print(f"Deleted issue {input_issue['issue_number']} from the database.")
+            logger.info(f"Deleted issue {input_issue['issue_number']} from the database.")
     except Exception as e:
-        print(f"An error occurred in process_issue_event: {e}")
+        logger.error(f"An error occurred in process_issue_event: {e}", exc_info=True)
 
 
 

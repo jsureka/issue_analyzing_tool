@@ -111,8 +111,8 @@ class IssueProcessor:
         
         # Validate minimum length (10 words)
         word_count = len(normalized.split())
-        if word_count < 10:
-            logger.warning(f"Issue text too short: {word_count} words (minimum 10)")
+        if word_count < 5:
+            logger.warning(f"Issue text too short: {word_count} words (minimum 5)")
             return None
         
         logger.info(f"Processing issue with {word_count} words")

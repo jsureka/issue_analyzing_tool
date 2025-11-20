@@ -1,13 +1,11 @@
-"""
-SPRINT - Issue Report Assistant
-GitHub App for automated bug localization using Knowledge Base system
-"""
 from flask import Flask, request, render_template
 from concurrent.futures import ThreadPoolExecutor
 from config import config
 import os
 import logging
 from GitHub_Event_Handler.processIssueEvents import process_issue_event
+from GitHub_Event_Handler.processPushEvents import process_push_event
+from GitHub_Event_Handler.processInstallationEvents import process_installation_event
 from Issue_Indexer.getAllIssues import fetch_repository_issues
 from Data_Storage.dbOperations import insert_issue_to_db, create_table_if_not_exists, delete_table
 
@@ -68,9 +66,6 @@ def api_git_msg():
                 if not (ref.endswith('/main') or ref.endswith('/master')):
                     return f"Ignoring push to non-main branch: {ref}", 200
                 
-                # Import here to avoid circular dependencies
-                from GitHub_Event_Handler.processPushEvents import process_push_event
-                
                 # Process push in background
                 executor.submit(process_push_event, repo_full_name, data)
                 
@@ -83,80 +78,36 @@ def api_git_msg():
             logging.info(f"Installation event received with action: {action}")
             installed_repos = data['repositories']
             logging.info(f"Number of repositories to install: {len(installed_repos)}")
+            
             for repo in installed_repos:
                 repo_full_name = repo['full_name']
-                create_table_if_not_exists(repo_full_name)
-                issues_data = fetch_repository_issues(repo_full_name)
-                
-                for issue in issues_data:
-                    issue_id = issue['number']
-                    issue_title = issue['title'] or ""
-                    issue_body = issue['body'] or ""
-                    created_at = issue['created_at']
-                    issue_url = issue['html_url']  
-                    issue_labels = [label['name'] for label in issue.get('labels', [])]
-
-                    insert_issue_to_db(repo_full_name, issue_id, issue_title, issue_body, created_at, issue_url, issue_labels)
-                
-                # Trigger Knowledge Base indexing in background
-                logging.info(f"Triggering Knowledge Base indexing for {repo_full_name}")
-                from GitHub_Event_Handler.processPushEvents import process_push_event
-                # Create a minimal push payload to trigger indexing
-                push_payload = {
-                    'repository': {
-                        'full_name': repo_full_name,
-                        'default_branch': repo.get('default_branch', 'master')
-                    },
-                    'ref': f"refs/heads/{repo.get('default_branch', 'master')}",
-                    'forced': False
-                }
-                executor.submit(process_push_event, repo_full_name, push_payload)
+                default_branch = repo.get('default_branch', 'master')
+                # Process in background
+                executor.submit(process_installation_event, repo_full_name, default_branch, 'created')
             
-            return "Installation event handled", 200
+            return "Installation event accepted for processing", 200
 
         elif event == 'installation_repositories' and action == 'added':
             logging.info(f"Installation repositories added event received")
             added_repos = data.get('repositories_added', [])
             logging.info(f"Number of repositories added: {len(added_repos)}")
+            
             for repo in added_repos:
                 repo_full_name = repo['full_name']
-                logging.info(f"Processing added repository: {repo_full_name}")
-                create_table_if_not_exists(repo_full_name)
-                issues_data = fetch_repository_issues(repo_full_name)
-                
-                for issue in issues_data:
-                    issue_id = issue['number']
-                    issue_title = issue['title'] or ""
-                    issue_body = issue['body'] or ""
-                    created_at = issue['created_at']
-                    issue_url = issue['html_url']  
-                    issue_labels = [label['name'] for label in issue.get('labels', [])]
-
-                    insert_issue_to_db(repo_full_name, issue_id, issue_title, issue_body, created_at, issue_url, issue_labels)
-                
-                # Trigger Knowledge Base indexing in background
-                logging.info(f"Triggering Knowledge Base indexing for {repo_full_name}")
-                from GitHub_Event_Handler.processPushEvents import process_push_event
-                # Create a minimal push payload to trigger indexing
-                push_payload = {
-                    'repository': {
-                        'full_name': repo_full_name,
-                        'default_branch': repo.get('default_branch', 'master')
-                    },
-                    'ref': f"refs/heads/{repo.get('default_branch', 'master')}",
-                    'forced': False
-                }
-                executor.submit(process_push_event, repo_full_name, push_payload)
+                default_branch = repo.get('default_branch', 'master')
+                # Process in background
+                executor.submit(process_installation_event, repo_full_name, default_branch, 'added')
             
-            return "Installation repositories added event handled", 200
+            return "Installation repositories added event accepted for processing", 200
 
         elif event == 'installation' and action == 'deleted':
             removed_repos = data['repositories']
             for repo in removed_repos:
                 repo_full_name = repo['full_name']
-                delete_table(repo_full_name)
+                # Process in background
+                executor.submit(process_installation_event, repo_full_name, None, 'deleted')
             
-            return "Uninstallation event handled, tables deleted", 200
+            return "Uninstallation event accepted for processing", 200
 
         elif event == 'issues':
             repo_full_name = data['repository']['full_name']
@@ -187,7 +138,6 @@ def api_git_msg():
         return "415 Unsupported Media Type ;)", 415
 
 
-if __name__ == '__main__':
 if __name__ == '__main__':
     app.run(debug=app.config['DEBUG'], port=app.config['PORT'])
 

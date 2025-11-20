@@ -115,3 +115,36 @@ def BLStartingCommentForWaiting(repo_full_name, issue_number):
         print("Waiting comment created successfully.")
     else:
         print(response.text)
+        
+def CreateErrorComment(repo_full_name, issue_number, error_message):
+    """
+    Post an error comment on the issue when processing fails.
+    """
+    url = f'https://api.github.com/repos/{repo_full_name}/issues/{issue_number}/comments'
+    auth_token = authenticate_github_app(repo_full_name)
+
+    headers = {
+        'Authorization': f'token {auth_token}',
+        'Accept': 'application/vnd.github.v3+json'
+    }
+
+    comment_body = (
+        "##  **Issue Analysis Failed**\n\n"
+        "INSIGHT encountered an error while analyzing this issue:\n\n"
+        f"> {error_message}\n\n"
+        "Please ensure the issue description provides enough context (at least 5 words) for analysis."
+    )
+
+    payload = {
+        'body': comment_body
+    }
+
+    try:
+        response = requests.post(url, headers=headers, json=payload)
+        response.raise_for_status()
+        if response.status_code == 201:
+            print("Error comment created successfully.")
+        else:
+            print(f"Failed to create error comment: {response.text}")
+    except Exception as e:
+        print(f"Exception while posting error comment: {e}")

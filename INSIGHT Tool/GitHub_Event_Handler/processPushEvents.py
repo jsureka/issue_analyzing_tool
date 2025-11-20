@@ -6,11 +6,6 @@ import logging
 import time
 from typing import Dict, Any, Optional
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
 logger = logging.getLogger(__name__)
 
 # Import required components
@@ -63,13 +58,31 @@ def process_push_event(repo_full_name: str, push_payload: Dict[str, Any]) -> Dic
                 'branch': ref
             }
         
+        # Get or sync repository
+        # If after_commit is None (e.g. from installation event), sync to latest
+        repo_path = get_or_sync_repository(repo_full_name, after_commit)
+        
+        # If after_commit was None, get the actual SHA we synced to
+        if not after_commit:
+            try:
+                import subprocess
+                result = subprocess.run(
+                    ['git', 'rev-parse', 'HEAD'],
+                    cwd=repo_path,
+                    capture_output=True,
+                    text=True,
+                    check=True
+                )
+                after_commit = result.stdout.strip()
+                logger.info(f"Resolved missing after_commit to {after_commit}")
+            except Exception as e:
+                logger.warning(f"Failed to resolve HEAD SHA: {e}")
+                after_commit = "unknown"
+
         logger.info(
             f"Push event: {before_commit[:7] if before_commit else 'initial'} → "
-            f"{after_commit[:7]} ({len(commits)} commits)"
+            f"{after_commit[:7] if after_commit else 'unknown'} ({len(commits)} commits)"
         )
-        
-        # Get or sync repository
-        repo_path = get_or_sync_repository(repo_full_name, after_commit)
         
         # Check if repository is already indexed
         status = GetIndexStatus(repo_full_name)
@@ -115,6 +128,9 @@ def process_push_event(repo_full_name: str, push_payload: Dict[str, Any]) -> Dic
         
     except Exception as e:
         error_msg = f"Failed to process push event for {repo_full_name}: {str(e)}"
+        print(f"CRITICAL ERROR in process_push_event: {error_msg}") # Force output to terminal
+        import traceback
+        traceback.print_exc()
         logger.error(error_msg, exc_info=True)
         
         error_result = {
