@@ -39,7 +39,7 @@ class Config:
     # Paths
     # Use a fixed path for repos instead of tempdir for persistence if needed, 
     # or keep tempdir but make it configurable.
-    REPO_STORAGE_PATH = os.getenv('REPO_STORAGE_PATH', os.path.join(os.getcwd(), 'sprint_repos'))
+    REPO_STORAGE_PATH = os.getenv('REPO_STORAGE_PATH', os.path.join(os.getcwd(), 'insight_repos'))
 
     @staticmethod
     def init_app(app):

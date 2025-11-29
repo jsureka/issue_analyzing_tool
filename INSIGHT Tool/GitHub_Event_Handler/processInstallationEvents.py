@@ -68,15 +68,23 @@ def process_installation_event(repo_full_name, repo_default_branch, action):
                 from config import Config
                 
                 # Construct path (assuming default structure from indexer.py)
-                # index_dir = "Data_Storage/KnowledgeBase"
                 index_dir = Config.KNOWLEDGE_BASE_DIR if hasattr(Config, 'KNOWLEDGE_BASE_DIR') else "Data_Storage/KnowledgeBase"
                 repo_dir = os.path.join(index_dir, repo_full_name.replace('/', '_'))
                 
                 if os.path.exists(repo_dir):
                     shutil.rmtree(repo_dir)
                     logger.info(f"Deleted vector index directory: {repo_dir}")
+                    
+                # 4. Delete Cloned Repository Files
+                repo_storage_path = Config.REPO_STORAGE_PATH
+                cloned_repo_dir = os.path.join(repo_storage_path, repo_full_name)
+                
+                if os.path.exists(cloned_repo_dir):
+                    shutil.rmtree(cloned_repo_dir)
+                    logger.info(f"Deleted cloned repository files: {cloned_repo_dir}")
+                    
             except Exception as e:
-                logger.error(f"Failed to delete vector index: {e}")
+                logger.error(f"Failed to delete local files: {e}")
 
     except Exception as e:
         logger.error(f"Failed to process installation event for {repo_full_name}: {e}", exc_info=True)

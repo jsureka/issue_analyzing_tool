@@ -103,7 +103,7 @@ def process_issue_event(repo_full_name, input_issue, action):
                     except Exception as e:
                         logger.error(f"Failed to sync repository: {e}")
                         # Fallback to temp if sync fails
-                        repo_path = os.path.join(tempfile.gettempdir(), 'sprint_repos', repo_full_name)
+                        repo_path = os.path.join(tempfile.gettempdir(), 'insight_repos', repo_full_name)
                         commit_sha = None
                     
                     # Start timing for telemetry
