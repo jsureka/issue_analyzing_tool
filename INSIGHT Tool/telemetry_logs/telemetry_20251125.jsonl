@@ -1,0 +1,4 @@
+{"type": "retrieval", "timestamp": "2025-11-25T15:49:01.534404Z", "issue_id": "11", "latency_ms": 15378.357648849487, "top_k": 5, "confidence": "medium", "repo_name": "jsureka/Calculator", "success": true}
+{"type": "error", "timestamp": "2025-11-25T15:49:06.407413Z", "error_type": "latency_threshold_exceeded", "error_msg": "End-to-end processing took 27.78s", "context": {"issue_number": 11, "repo": "jsureka/Calculator", "latency_seconds": 27.77705216407776}}
+{"type": "retrieval", "timestamp": "2025-11-25T15:51:29.566066Z", "issue_id": "12", "latency_ms": 13679.791688919067, "top_k": 5, "confidence": "medium", "repo_name": "jsureka/Calculator", "success": true}
+{"type": "error", "timestamp": "2025-11-25T15:51:35.262186Z", "error_type": "latency_threshold_exceeded", "error_msg": "End-to-end processing took 28.23s", "context": {"issue_number": 12, "repo": "jsureka/Calculator", "latency_seconds": 28.232540369033813}}

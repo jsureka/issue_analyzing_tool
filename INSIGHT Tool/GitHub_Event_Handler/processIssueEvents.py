@@ -11,7 +11,7 @@ from .app_authentication import authenticate_github_app
 from Feature_Components.knowledgeBase import BugLocalization as KBBugLocalization, GetIndexStatus
 from Data_Storage.dbOperations import create_table_if_not_exists, is_table_exists, insert_issue_to_db, delete_issue_from_db
 from Feature_Components.KnowledgeBase.telemetry import get_telemetry_logger
-from Feature_Components.KnowledgeBase.auto_labeler import AutoLabeler
+
 
 logger = logging.getLogger(__name__)
 
@@ -179,7 +179,6 @@ def process_issue_event(repo_full_name, input_issue, action):
                     buggy_code_files_list = []
                 
                 if buggy_code_files_list:
-                    # Pass kb_results for new format comment generation
                     CreateCommentBL(
                         repo_full_name, 
                         input_issue['issue_branch'], 
@@ -189,22 +188,6 @@ def process_issue_event(repo_full_name, input_issue, action):
                         kb_results=kb_results,
                         use_new_format=True
                     )
-                    
-                    # Phase 4: Apply confidence label
-                    try:
-                        confidence = kb_results.get('confidence', 'medium')
-                        auto_labeler = AutoLabeler(auth_token, repo_owner, repo_name)
-                        
-                        # Ensure labels exist
-                        auto_labeler.ensure_labels_exist()
-                        
-                        # Apply confidence label
-                        if auto_labeler.apply_confidence_label(input_issue['issue_number'], confidence):
-                            logger.info(f"Applied {confidence} confidence label to issue #{input_issue['issue_number']}")
-                        else:
-                            logger.warning(f"Failed to apply confidence label to issue #{input_issue['issue_number']}")
-                    except Exception as e:
-                        logger.error(f"Auto-labeling failed: {e}")
             
             # Log end-to-end latency
             total_latency_seconds = time.time() - start_time_total

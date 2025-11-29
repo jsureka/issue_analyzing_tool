@@ -31,7 +31,8 @@ def fetch_all_code_files(repo_full_name, branch='main'):
         return code_files
 
     except requests.exceptions.HTTPError as http_err:
-        print(f"HTTP error occurred: {http_err} - {response.text}")
+        error_text = response.text if 'response' in locals() else "No response content"
+        print(f"HTTP error occurred: {http_err} - {error_text}")
     except requests.exceptions.RequestException as req_err:
         print(f"Request error occurred: {req_err}")
     except ValueError as json_err:

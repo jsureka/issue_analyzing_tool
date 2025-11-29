@@ -87,6 +87,37 @@ class GraphStore:
             if not self.connect():
                 raise ConnectionError("Failed to connect to Neo4j database")
 
+    def create_directory_node(self, dir_id: str, repo: str, path: str, summary: str = "") -> bool:
+        """
+        Create a directory node in the graph (GraphRAG Community)
+        
+        Args:
+            dir_id: Unique directory identifier
+            repo: Repository name
+            path: Directory path relative to repo root
+            summary: LLM-generated summary of the directory
+            
+        Returns:
+            True if successful
+        """
+        self._ensure_connected()
+        
+        try:
+            with self.driver.session() as session:
+                query = """
+                CREATE (d:Directory {
+                    id: $dir_id,
+                    repo: $repo,
+                    path: $path,
+                    summary: $summary
+                })
+                """
+                session.run(query, dir_id=dir_id, repo=repo, path=path, summary=summary)
+                return True
+        except Exception as e:
+            logger.error(f"Failed to create directory node: {e}")
+            return False
+
     def create_file_node(self, file_id: str, repo: str, path: str, 
                         language: str, lines_of_code: int, commit_sha: str) -> bool:
         """
@@ -451,3 +482,77 @@ class GraphStore:
         except Exception as e:
             logger.error(f"Failed to get graph stats: {e}")
             return {'files': 0, 'classes': 0, 'functions': 0, 'relationships': 0}
+    def get_directory_summaries(self, repo_name: str) -> List[Dict[str, Any]]:
+        """
+        Get all directory summaries for a repository
+        
+        Args:
+            repo_name: Repository name
+            
+        Returns:
+            List of directory summaries
+        """
+        self._ensure_connected()
+        
+        try:
+            with self.driver.session() as session:
+                query = """
+                MATCH (d:Directory {repo: $repo_name})
+                RETURN d.path as path, d.summary as summary
+                """
+                result = session.run(query, repo_name=repo_name)
+                
+                summaries = []
+                for record in result:
+                    summaries.append({
+                        'path': record['path'],
+                        'summary': record['summary']
+                    })
+                return summaries
+        except Exception as e:
+            logger.error(f"Failed to get directory summaries: {e}")
+            return []
+
+    def get_context_subgraph(self, function_ids: List[str], depth: int = 1) -> str:
+        """
+        Retrieve a subgraph context for a list of functions
+        
+        Args:
+            function_ids: List of function IDs to start from
+            depth: Traversal depth
+            
+        Returns:
+            String representation of the subgraph
+        """
+        self._ensure_connected()
+        
+        try:
+            with self.driver.session() as session:
+                # Get callers and callees
+                query = """
+                MATCH (f:Function)
+                WHERE f.id IN $function_ids
+                OPTIONAL MATCH (caller:Function)-[:CALLS]->(f)
+                OPTIONAL MATCH (f)-[:CALLS]->(callee:Function)
+                RETURN f.name as func, 
+                       collect(DISTINCT caller.name) as callers,
+                       collect(DISTINCT callee.name) as callees
+                """
+                result = session.run(query, function_ids=function_ids)
+                
+                context = "Graph Context:\n"
+                for record in result:
+                    func = record['func']
+                    callers = [c for c in record['callers'] if c]
+                    callees = [c for c in record['callees'] if c]
+                    
+                    context += f"- Function '{func}':\n"
+                    if callers:
+                        context += f"  - Called by: {', '.join(callers)}\n"
+                    if callees:
+                        context += f"  - Calls: {', '.join(callees)}\n"
+                        
+                return context
+        except Exception as e:
+            logger.error(f"Failed to get context subgraph: {e}")
+            return "Error retrieving graph context"

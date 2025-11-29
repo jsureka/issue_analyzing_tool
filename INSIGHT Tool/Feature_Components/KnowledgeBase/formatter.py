@@ -146,6 +146,11 @@ class ResultFormatter:
         Returns:
             Formatted dictionary
         """
+        # Extract LLM results if present in repo_info or kwargs
+        llm_analysis = repo_info.get('llm_analysis')
+        llm_hypothesis = repo_info.get('llm_hypothesis')
+        llm_patch = repo_info.get('llm_patch')
+        
         # Aggregate by file
         file_results = self.aggregate_by_file(retrieval_results)
         
@@ -171,7 +176,10 @@ class ResultFormatter:
             'commit_sha': repo_info.get('commit_sha', ''),
             'timestamp': datetime.utcnow().isoformat() + 'Z',
             'total_results': len(retrieval_results),
-            'top_files': file_results
+            'top_files': file_results,
+            'llm_analysis': llm_analysis,
+            'llm_hypothesis': llm_hypothesis,
+            'llm_patch': llm_patch
         }
         
         logger.info(f"Formatted {len(file_results)} files with {len(retrieval_results)} functions")

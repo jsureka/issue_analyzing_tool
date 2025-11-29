@@ -1,4 +1,4 @@
-# SPRINT Multi-Language Knowledge Base - Usage Manual
+# INSIGHT Multi-Language Knowledge Base - Usage Manual
 
 ## Table of Contents
 
@@ -19,14 +19,17 @@
 ### Prerequisites
 
 ```bash
-# Python 3.8 or higher
+# Python 3.11 or higher
 python --version
 
 # Git
 git --version
 
-# Neo4j (optional, for graph features)
+# Neo4j (Required for GraphRAG features)
 # Download from: https://neo4j.com/download/
+
+# Google Gemini API Key
+# Get one from: https://aistudio.google.com/app/apikey
 ```
 
 ### Installation
@@ -37,7 +40,7 @@ git clone <repository-url>
 cd issue_analyzing_tool
 
 # 2. Install dependencies
-cd "SPRINT Tool"
+cd "INSIGHT Tool"
 pip install -r requirements.txt
 
 # 3. Verify installation
@@ -57,8 +60,8 @@ Create a test script to index and query repositories:
 import sys
 import os
 
-# Add SPRINT Tool to path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'SPRINT Tool'))
+# Add INSIGHT Tool to path
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'INSIGHT Tool'))
 
 from Feature_Components.knowledgeBase import IndexRepository, BugLocalization
 
@@ -81,9 +84,10 @@ results = BugLocalization(
     k=10
 )
 
-print(f"Found {results['total_results']} relevant functions")
-for file_data in results['top_files'][:3]:
-    print(f"  - {file_data['file_path']}: {len(file_data['functions'])} functions")
+print(f"Found {results.get('total_results', 0)} relevant functions")
+if 'top_files' in results:
+    for file_data in results['top_files'][:3]:
+        print(f"  - {file_data['file_path']}: {len(file_data['functions'])} functions")
 ```
 
 ---
@@ -103,7 +107,7 @@ cd python-project
 ```python
 # index_python_repo.py
 import sys
-sys.path.insert(0, '../SPRINT Tool')
+sys.path.insert(0, '../INSIGHT Tool')
 
 from Feature_Components.knowledgeBase import IndexRepository
 
@@ -129,7 +133,7 @@ Time taken: {result['indexing_time_seconds']:.2f} seconds
 ```python
 # test_python_bug.py
 import sys
-sys.path.insert(0, '../SPRINT Tool')
+sys.path.insert(0, '../INSIGHT Tool')
 
 from Feature_Components.knowledgeBase import BugLocalization
 
@@ -152,22 +156,23 @@ results = BugLocalization(
 # Display results
 print(f"\nBug Localization Results")
 print(f"========================")
-print(f"Confidence: {results['confidence']} ({results['confidence_score']:.0%})")
-print(f"Total results: {results['total_results']}")
+print(f"Confidence: {results.get('confidence_level', 'unknown')} ({results.get('confidence_score', 0):.0%})")
+
+print(f"\nLLM Analysis:")
+print(results.get('llm_analysis', 'No analysis available'))
 
 print(f"\nTop 5 Candidate Functions:")
 rank = 1
-for file_data in results['top_files'][:5]:
-    for func in file_data['functions'][:2]:
-        print(f"\n{rank}. {func['name']} in {file_data['file_path']}")
-        print(f"   Language: {func.get('language', 'python')}")
-        print(f"   Score: {func['score']:.3f}")
-        print(f"   Lines: {func['line_range'][0]}-{func['line_range'][1]}")
-        if func.get('snippet'):
-            print(f"   Preview: {func['snippet'][:100]}...")
-        rank += 1
-        if rank > 5:
-            break
+if 'top_files' in results:
+    for file_data in results['top_files'][:5]:
+        for func in file_data['functions'][:2]:
+            print(f"\n{rank}. {func['name']} in {file_data['file_path']}")
+            print(f"   Language: {func.get('language', 'python')}")
+            print(f"   Score: {func['score']:.3f}")
+            print(f"   Lines: {func['line_range'][0]}-{func['line_range'][1]}")
+            rank += 1
+            if rank > 5:
+                break
 ```
 
 ### Expected Output
@@ -176,7 +181,9 @@ for file_data in results['top_files'][:5]:
 Bug Localization Results
 ========================
 Confidence: high (92%)
-Total results: 10
+
+LLM Analysis:
+The issue appears to be in the user validation logic. The `validate_user` function checks for existing users but fails to handle the case where the database connection is null...
 
 Top 5 Candidate Functions:
 
@@ -184,193 +191,11 @@ Top 5 Candidate Functions:
    Language: python
    Score: 0.945
    Lines: 45-78
-   Preview: def validate_user(username, password):
-       """Validate user credentials"""
-       if not username:...
 
 2. login in auth/authentication.py
    Language: python
    Score: 0.887
    Lines: 120-145
-   Preview: def login(username, password):
-       """Handle user login"""
-       user = validate_user(username, password)...
-
-3. hash_password in auth/utils.py
-   Language: python
-   Score: 0.756
-   Lines: 23-35
-   Preview: def hash_password(password):
-       """Hash password using bcrypt"""...
-```
-
----
-
-## Java Repository Testing
-
-### Step 1: Prepare Java Repository
-
-```bash
-# Example: Test with a Java project
-git clone https://github.com/example/java-project
-cd java-project
-```
-
-### Step 2: Index the Repository
-
-```python
-# index_java_repo.py
-import sys
-sys.path.insert(0, '../SPRINT Tool')
-
-from Feature_Components.knowledgeBase import IndexRepository
-
-result = IndexRepository(
-    repo_path="java-project",
-    repo_name="example/java-project",
-    model_name="microsoft/unixcoder-base"
-)
-
-print(f"""
-Java Repository Indexed!
-========================
-Files indexed: {result['total_files']}
-Methods found: {result['total_functions']}
-Commit SHA: {result['commit_sha']}
-Time taken: {result['indexing_time_seconds']:.2f} seconds
-
-Language Statistics:
-""")
-
-if 'languages' in result:
-    for lang, count in result['languages'].items():
-        print(f"  - {lang}: {count} files")
-```
-
-### Step 3: Test Bug Localization
-
-```python
-# test_java_bug.py
-import sys
-sys.path.insert(0, '../SPRINT Tool')
-
-from Feature_Components.knowledgeBase import BugLocalization
-
-# Example: Find bug in data processor
-results = BugLocalization(
-    issue_title="NullPointerException in DataProcessor",
-    issue_body="""
-    The application crashes with a NullPointerException when processing
-    empty data. The processData method in the Processor class doesn't
-    handle null inputs properly. The validateInput method should check
-    for null values before processing.
-    """,
-    repo_owner="example",
-    repo_name="java-project",
-    repo_path="java-project",
-    k=10
-)
-
-# Display results with Java-specific formatting
-print(f"\nJava Bug Localization Results")
-print(f"==============================")
-print(f"Confidence: {results['confidence']} ({results['confidence_score']:.0%})")
-
-print(f"\nTop Methods:")
-for i, file_data in enumerate(results['top_files'][:5], 1):
-    for func in file_data['functions'][:1]:
-        print(f"\n{i}. {func['signature']}")
-        print(f"   File: {file_data['file_path']}")
-        print(f"   Lines: {func['line_range'][0]}-{func['line_range'][1]}")
-        print(f"   Score: {func['score']:.3f}")
-```
-
-### Expected Output
-
-```
-Java Bug Localization Results
-==============================
-Confidence: high (89%)
-
-Top Methods:
-
-1. public Map<String, Object> processData(String input)
-   File: src/main/java/com/example/Processor.java
-   Lines: 45-78
-   Score: 0.923
-
-2. private boolean validateInput(String input)
-   File: src/main/java/com/example/Processor.java
-   Lines: 80-95
-   Score: 0.856
-
-3. public void handleNullData()
-   File: src/main/java/com/example/DataHandler.java
-   Lines: 120-135
-   Score: 0.734
-```
-
----
-
-## Mixed-Language Repository Testing
-
-### Testing Repositories with Both Python and Java
-
-```python
-# test_mixed_repo.py
-import sys
-sys.path.insert(0, '../SPRINT Tool')
-
-from Feature_Components.knowledgeBase import IndexRepository, BugLocalization
-
-# Index mixed repository
-print("Indexing mixed-language repository...")
-result = IndexRepository(
-    repo_path="mixed-project",
-    repo_name="example/mixed-project"
-)
-
-print(f"\nIndexing Results:")
-print(f"Total files: {result['total_files']}")
-print(f"Total functions: {result['total_functions']}")
-
-if 'languages' in result:
-    print(f"\nLanguage Breakdown:")
-    for lang, count in result['languages'].items():
-        print(f"  {lang}: {count} files")
-
-# Test bug localization
-results = BugLocalization(
-    issue_title="API integration issue",
-    issue_body="""
-    The API client fails to connect. Both the Python client wrapper
-    and the Java service implementation seem to have connection issues.
-    """,
-    repo_owner="example",
-    repo_name="mixed-project",
-    repo_path="mixed-project",
-    k=15
-)
-
-# Group results by language
-python_results = []
-java_results = []
-
-for file_data in results['top_files']:
-    lang = file_data.get('language', 'unknown')
-    for func in file_data['functions']:
-        if lang == 'python':
-            python_results.append((file_data['file_path'], func))
-        elif lang == 'java':
-            java_results.append((file_data['file_path'], func))
-
-print(f"\nPython Functions Found: {len(python_results)}")
-for path, func in python_results[:3]:
-    print(f"  - {func['name']} in {path} (score: {func['score']:.3f})")
-
-print(f"\nJava Methods Found: {len(java_results)}")
-for path, func in java_results[:3]:
-    print(f"  - {func['name']} in {path} (score: {func['score']:.3f})")
 ```
 
 ---
@@ -383,7 +208,7 @@ for path, func in java_results[:3]:
 2. Click "New GitHub App"
 3. Fill in the details:
 
-   - **Name**: SPRINT Bug Localization
+   - **Name**: INSIGHT Bug Localization
    - **Homepage URL**: Your server URL
    - **Webhook URL**: `https://your-server.com/webhook`
    - **Webhook Secret**: Generate a secure secret
@@ -397,26 +222,32 @@ for path, func in java_results[:3]:
 5. Subscribe to Events:
 
    - ☑ Issues (opened, edited)
+   - ☑ Installation (created, deleted)
 
 6. Click "Create GitHub App"
 
 ### Step 2: Configure Environment
 
 ```bash
-# Create .env file in SPRINT Tool directory
-cat > "SPRINT Tool/.env" << EOF
+# Create .env file in INSIGHT Tool directory
+cat > "INSIGHT Tool/.env" << EOF
 # GitHub App Configuration
 GITHUB_APP_ID=your_app_id
 GITHUB_PRIVATE_KEY=path/to/private-key.pem
 CLIENT_ID=your_client_id
 WEBHOOK_SECRET=your_webhook_secret
 
+# LLM Configuration (Gemini)
+GEMINI_API_KEY=your_gemini_api_key
+LLM_MODEL_NAME=gemini-2.0-flash
+LLM_TEMPERATURE=0.2
+
 # Model Paths
 DUPLICATE_BR_MODEL_PATH=path/to/duplicate_model
 SEVERITY_PREDICTION_MODEL_PATH=path/to/severity_model
 BUGLOCALIZATION_MODEL_PATH=path/to/buglocalization_model
 
-# Neo4j Configuration (optional)
+# Neo4j Configuration
 NEO4J_URI=bolt://localhost:7687
 NEO4J_USER=neo4j
 NEO4J_PASSWORD=your_password
@@ -433,7 +264,7 @@ EOF
 ngrok http 5000
 
 # Terminal 2: Start Flask application
-cd "SPRINT Tool"
+cd "INSIGHT Tool"
 python main.py
 ```
 
@@ -457,7 +288,7 @@ with valid credentials, they get an authentication error. The validate_password
 method seems to be comparing hashes incorrectly.
 ```
 
-2. Wait for SPRINT to process (usually < 10 seconds)
+2. Wait for INSIGHT to process (usually < 15 seconds)
 
 3. Check for the automated comment:
 
@@ -466,36 +297,23 @@ method seems to be comparing hashes incorrectly.
 
 **Confidence:** High (92% probability) 🟢
 
-I've analyzed this issue and identified the most likely locations for the bug:
+### 🧠 Technical Analysis
+The issue stems from an incorrect hash comparison in `validate_password`. The function uses `==` instead of `bcrypt.checkpw`, which causes the comparison to fail even for valid passwords...
+
+### 🧪 Hypothesis
+The `validate_password` function in `auth/validator.py` is implementing a direct string comparison for password hashes, which is incorrect and insecure. It should use the library's verification method.
+
+### 🛠️ Suggested Patch
+```python
+def validate_password(input_password, stored_hash):
+-    return input_password == stored_hash
++    return bcrypt.checkpw(input_password.encode('utf-8'), stored_hash)
+```
 
 ### Top Candidate Functions
 
 #### 1. `validate_password` in `auth/validator.py` (Score: 0.92)
-
 **Lines 45-67** | [View on GitHub](...)
-
-```python
-def validate_password(input_password, stored_hash):
-    """Validate password against stored hash"""
-    return bcrypt.checkpw(input_password, stored_hash)
-```
-````
-
-**Why this function?** High semantic similarity to issue description (score: 0.92).
-
-#### 2. `login` in `auth/authentication.py` (Score: 0.87)
-
-**Lines 120-145** | [View on GitHub](...)
-
-```python
-def login(username, password):
-    """Handle user login"""
-    user = get_user(username)
-    if validate_password(password, user.password_hash):
-        return create_session(user)
-    return None
-```
-
 ````
 
 ---
@@ -513,25 +331,11 @@ result = IndexRepository(
     repo_path: str,              # Path to repository root
     repo_name: str,              # Repository name (e.g., "owner/repo")
     model_name: str = "microsoft/unixcoder-base",  # Embedding model
-    neo4j_uri: str = "bolt://localhost:7687",      # Neo4j URI (optional)
+    neo4j_uri: str = "bolt://localhost:7687",      # Neo4j URI
     neo4j_user: str = "neo4j",                     # Neo4j username
     neo4j_password: str = "password"               # Neo4j password
 )
-
-# Returns:
-{
-    'success': True,
-    'repo_name': 'owner/repo',
-    'commit_sha': 'abc123...',
-    'total_files': 150,
-    'total_functions': 750,
-    'total_windows': 7500,
-    'indexing_time_seconds': 120.5,
-    'languages': {'python': 100, 'java': 50},  # Language statistics
-    'index_path': 'path/to/index.faiss',
-    'metadata_path': 'path/to/metadata.json'
-}
-````
+```
 
 ### BugLocalization
 
@@ -554,49 +358,25 @@ results = BugLocalization(
 # Returns:
 {
     'repository': 'owner/repo',
-    'commit_sha': 'abc123...',
-    'timestamp': '2025-11-14T12:00:00Z',
-    'total_results': 10,
-    'confidence': 'high',
+    'confidence_level': 'high',
     'confidence_score': 0.92,
+    'llm_analysis': '...',
+    'llm_hypothesis': '...',
+    'llm_patch': '...',
     'top_files': [
         {
             'file_path': 'src/module.py',
-            'language': 'python',
             'score': 0.87,
             'functions': [
                 {
                     'name': 'process_data',
-                    'signature': 'def process_data(input: str) -> dict:',
                     'line_range': [45, 78],
                     'score': 0.87,
-                    'language': 'python',
-                    'snippet': '...',
-                    'docstring': '...'
+                    # ...
                 }
             ]
         }
-    ],
-    'line_level_results': [...]  # If enabled
-}
-```
-
-### GetIndexStatus
-
-Check if a repository is indexed.
-
-```python
-from Feature_Components.knowledgeBase import GetIndexStatus
-
-status = GetIndexStatus(repo_name: str)
-
-# Returns:
-{
-    'indexed': True,
-    'repo_name': 'owner/repo',
-    'total_functions': 750,
-    'index_path': 'path/to/index.faiss',
-    'last_modified': 1699876543.0
+    ]
 }
 ```
 
@@ -606,289 +386,36 @@ status = GetIndexStatus(repo_name: str)
 
 ### Common Issues
 
-#### 1. "Repository not indexed"
+#### 1. "LLM Analysis Failed"
 
-**Problem**: Trying to localize bugs in an unindexed repository
-
-**Solution**:
-
-```python
-from Feature_Components.knowledgeBase import IndexRepository
-
-IndexRepository(
-    repo_path="path/to/repo",
-    repo_name="owner/repo"
-)
-```
-
-#### 2. "No module named 'tree_sitter_java'"
-
-**Problem**: Java parser dependencies not installed
+**Problem**: Missing or invalid Gemini API key.
 
 **Solution**:
+Check your `.env` file and ensure `GEMINI_API_KEY` is set correctly.
 
-```bash
-pip install tree-sitter-java==0.21.0
-```
+#### 2. "Repository not indexed"
+
+**Problem**: Trying to localize bugs in an unindexed repository.
+
+**Solution**:
+Ensure the repository is installed via the GitHub App or manually indexed using `IndexRepository`.
 
 #### 3. "Failed to connect to Neo4j"
 
-**Problem**: Neo4j database not running
+**Problem**: Neo4j database not running.
 
 **Solution**:
+Start Neo4j (`neo4j start`) and check connection settings in `.env`.
 
-```bash
-# Start Neo4j
-neo4j start
+#### 4. "Lines 0-0" in Results
 
-# Or skip graph features (optional)
-# The system works without Neo4j
-```
-
-#### 4. "Model loading failed"
-
-**Problem**: Embedding model not found
+**Problem**: Line number metadata missing from index.
 
 **Solution**:
-
-```bash
-# Manually download model
-python -c "from transformers import AutoModel; AutoModel.from_pretrained('microsoft/unixcoder-base')"
-```
-
-#### 5. "Parsing failed for Java files"
-
-**Problem**: Version mismatch between tree-sitter and tree-sitter-java
-
-**Solution**:
-
-```bash
-# Use compatible versions
-pip install tree-sitter==0.21.3 tree-sitter-java==0.21.0
-```
-
-### Debug Mode
-
-Enable detailed logging:
-
-```python
-import logging
-
-logging.basicConfig(
-    level=logging.DEBUG,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-
-# Now run your code
-from Feature_Components.knowledgeBase import IndexRepository
-# ...
-```
+Re-index the repository to capture line numbers correctly.
 
 ### Performance Issues
 
-If indexing or retrieval is slow:
-
-1. **Reduce batch size**:
-
-```python
-# In config.py
-BATCH_SIZE = 16  # Default is 32
-```
-
-2. **Disable line-level localization**:
-
-```python
-results = BugLocalization(..., enable_line_level=False)
-```
-
-3. **Use GPU if available**:
-
-```bash
-# Install GPU version of PyTorch
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
-```
-
----
-
-## Best Practices
-
-### 1. Repository Indexing
-
-- **Index once, query many**: Index repositories during setup, not on every query
-- **Update incrementally**: Re-index only when code changes significantly
-- **Monitor storage**: Large repositories can create large indices (1GB+ for 10k files)
-
-### 2. Query Optimization
-
-- **Be specific**: More detailed issue descriptions yield better results
-- **Include context**: Mention file names, function names, or error messages
-- **Use keywords**: Technical terms help match relevant code
-
-### 3. GitHub Integration
-
-- **Test locally first**: Use ngrok to test before deploying
-- **Monitor rate limits**: GitHub API has rate limits (5000 requests/hour)
-- **Handle errors gracefully**: Log errors but don't crash on failures
-
-### 4. Multi-Language Projects
-
-- **Index all languages**: The system handles mixed repositories automatically
-- **Language-specific queries**: Mention the language in the issue if relevant
-- **Check language statistics**: Review indexed language breakdown
-
-### 5. Production Deployment
-
-- **Use environment variables**: Never hardcode secrets
-- **Enable monitoring**: Track performance and errors
-- **Set up backups**: Backup indices and metadata regularly
-- **Scale horizontally**: Use multiple workers for high traffic
-
-### 6. Testing
-
-- **Start small**: Test with small repositories first
-- **Verify results**: Manually check if top results make sense
-- **Iterate**: Adjust confidence thresholds based on feedback
-- **Document issues**: Keep track of false positives/negatives
-
----
-
-## Example Workflows
-
-### Workflow 1: Local Development Testing
-
-```bash
-# 1. Index your project
-python index_my_project.py
-
-# 2. Create test issues
-python test_bug_scenarios.py
-
-# 3. Review results
-python analyze_results.py
-
-# 4. Adjust and re-test
-python reindex_and_test.py
-```
-
-### Workflow 2: GitHub Integration
-
-```bash
-# 1. Set up GitHub App
-# (Follow GitHub Plugin Setup section)
-
-# 2. Start server
-python main.py
-
-# 3. Create test issue on GitHub
-# (Issue will be automatically processed)
-
-# 4. Review automated comment
-# (Check GitHub issue for SPRINT's response)
-
-# 5. Monitor logs
-tail -f logs/sprint.log
-```
-
-### Workflow 3: Batch Processing
-
-```python
-# process_multiple_repos.py
-repos = [
-    ("path/to/repo1", "owner/repo1"),
-    ("path/to/repo2", "owner/repo2"),
-    ("path/to/repo3", "owner/repo3"),
-]
-
-for repo_path, repo_name in repos:
-    print(f"Processing {repo_name}...")
-    result = IndexRepository(repo_path, repo_name)
-    print(f"  ✓ Indexed {result['total_functions']} functions")
-```
-
----
-
-## Support and Resources
-
-### Documentation
-
-- Architecture: See `ARCHITECTURE.md`
-- API Reference: See `SPRINT Tool/Feature_Components/KnowledgeBase/README.md`
-- Configuration: See `SPRINT Tool/Feature_Components/KnowledgeBase/config.py`
-
-### Community
-
-- GitHub Issues: Report bugs and request features
-- Discussions: Ask questions and share experiences
-
-### Contributing
-
-- Follow the existing code style
-- Add tests for new features
-- Update documentation
-- Submit pull requests
-
----
-
-## Appendix
-
-### Supported Languages
-
-| Language   | Extensions    | Parser             | Status             |
-| ---------- | ------------- | ------------------ | ------------------ |
-| Python     | `.py`         | tree-sitter-python | ✅ Fully Supported |
-| Java       | `.java`       | tree-sitter-java   | ✅ Fully Supported |
-| JavaScript | `.js`, `.jsx` | -                  | 🔄 Planned         |
-| TypeScript | `.ts`, `.tsx` | -                  | 🔄 Planned         |
-| C++        | `.cpp`, `.h`  | -                  | 🔄 Planned         |
-
-### Configuration Options
-
-```python
-# SPRINT Tool/Feature_Components/KnowledgeBase/config.py
-
-# Model Configuration
-DEFAULT_MODEL_NAME = "microsoft/unixcoder-base"
-EMBEDDING_DIMENSION = 768
-MAX_TOKEN_LENGTH = 512
-BATCH_SIZE = 32
-
-# Retrieval Configuration
-DEFAULT_TOP_K = 10
-MAX_TOP_K = 50
-MIN_ISSUE_WORDS = 10
-
-# Performance Configuration
-MAX_SNIPPET_LENGTH = 500
-MAX_FUNCTION_BODY_LENGTH = 2000
-
-# Language Configuration
-SUPPORTED_LANGUAGES = {
-    'python': {
-        'extensions': ['.py'],
-        'parser': 'PythonParser',
-        'syntax_highlight': 'python'
-    },
-    'java': {
-        'extensions': ['.java'],
-        'parser': 'JavaParser',
-        'syntax_highlight': 'java'
-    }
-}
-```
-
-### Performance Benchmarks
-
-Based on testing with real repositories:
-
-| Repository     | Language | Files | Functions | Index Time | Query Time |
-| -------------- | -------- | ----- | --------- | ---------- | ---------- |
-| Flask          | Python   | 150   | 800       | 2.5 min    | 0.8 sec    |
-| Django         | Python   | 1200  | 6000      | 18 min     | 1.2 sec    |
-| Spring Boot    | Java     | 300   | 1500      | 5 min      | 0.9 sec    |
-| WheelOfFortune | Java     | 9     | 38        | 3 sec      | 0.4 sec    |
-| Mixed Project  | Both     | 500   | 2500      | 8 min      | 1.0 sec    |
-
----
-
-**Last Updated**: November 14, 2025  
-**Version**: 1.1.0 (Multi-Language Support)
+If indexing is slow:
+1.  **Use GPU**: Install PyTorch with CUDA support.
+2.  **Check Neo4j**: Ensure Neo4j has enough memory allocated.

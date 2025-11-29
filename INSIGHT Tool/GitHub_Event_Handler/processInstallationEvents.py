@@ -24,7 +24,10 @@ def process_installation_event(repo_full_name, repo_default_branch, action):
                 issue_url = issue['html_url']  
                 issue_labels = [label['name'] for label in issue.get('labels', [])]
 
-                insert_issue_to_db(repo_full_name, issue_id, issue_title, issue_body, created_at, issue_url, issue_labels)
+                try:
+                    insert_issue_to_db(repo_full_name, issue_id, issue_title, issue_body, created_at, issue_url, issue_labels)
+                except Exception as e:
+                    logger.warning(f"Failed to insert issue {issue_id} (likely duplicate): {e}")
             
             # Trigger Knowledge Base indexing
             logger.info(f"Triggering Knowledge Base indexing for {repo_full_name}")
@@ -43,8 +46,37 @@ def process_installation_event(repo_full_name, repo_default_branch, action):
             process_push_event(repo_full_name, push_payload)
             
         elif action == 'deleted':
+            # 1. Delete SQLite data
             delete_table(repo_full_name)
-            logger.info(f"Deleted table for {repo_full_name}")
+            logger.info(f"Deleted SQLite table for {repo_full_name}")
+            
+            # 2. Delete Neo4j data
+            try:
+                from Feature_Components.KnowledgeBase.graph_store import GraphStore
+                store = GraphStore()
+                if store.connect():
+                    store.clear_database(repo_full_name)
+                    store.close()
+                    logger.info(f"Cleared Neo4j graph for {repo_full_name}")
+            except Exception as e:
+                logger.error(f"Failed to clear Neo4j data: {e}")
+                
+            # 3. Delete Vector Index files
+            try:
+                import shutil
+                import os
+                from config import Config
+                
+                # Construct path (assuming default structure from indexer.py)
+                # index_dir = "Data_Storage/KnowledgeBase"
+                index_dir = Config.KNOWLEDGE_BASE_DIR if hasattr(Config, 'KNOWLEDGE_BASE_DIR') else "Data_Storage/KnowledgeBase"
+                repo_dir = os.path.join(index_dir, repo_full_name.replace('/', '_'))
+                
+                if os.path.exists(repo_dir):
+                    shutil.rmtree(repo_dir)
+                    logger.info(f"Deleted vector index directory: {repo_dir}")
+            except Exception as e:
+                logger.error(f"Failed to delete vector index: {e}")
 
     except Exception as e:
         logger.error(f"Failed to process installation event for {repo_full_name}: {e}", exc_info=True)

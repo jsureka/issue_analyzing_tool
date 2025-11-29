@@ -23,8 +23,8 @@
   </header>
 
   <section class="hero">
-    <h1>Automated Bug Localization</h1>
-    <p>Accelerate your debugging workflow with AI-powered issue analysis and code localization.</p>
+    <h1>Agentic Bug Localization & Repair</h1>
+    <p>Accelerate your debugging workflow with AI-powered analysis, hypothesis generation, and automated patching using Gemini 2.0 and GraphRAG.</p>
     <a href="#usage" class="cta-button">Install Now</a>
   </section>
 
@@ -32,20 +32,19 @@
     <h2>Core Capabilities</h2>
     <div class="features-grid">
       <div class="card">
-        <span class="icon">🎯</span>
-        <h3>Precise Bug Localization</h3>
-        <p>Leverages advanced vector similarity search to pinpoint the exact files needing attention based on issue
-          descriptions.</p>
+        <span class="icon">🤖</span>
+        <h3>Agentic Workflow</h3>
+        <p>Uses LangGraph to orchestrate a multi-step reasoning process: Retrieve -> Analyze -> Hypothesize -> Patch.</p>
       </div>
       <div class="card">
-        <span class="icon">⚡</span>
-        <h3>Real-time Analysis</h3>
-        <p>Processes GitHub issues instantly via webhooks, providing immediate feedback to developers.</p>
+        <span class="icon">🕸️</span>
+        <h3>GraphRAG Context</h3>
+        <p>Combines vector search with knowledge graph traversals (Neo4j) and directory summaries for deep architectural understanding.</p>
       </div>
       <div class="card">
-        <span class="icon">🧠</span>
-        <h3>Knowledge Base</h3>
-        <p>Maintains a semantic understanding of your codebase using FAISS and Neo4j for deep context awareness.</p>
+        <span class="icon">✨</span>
+        <h3>Automated Patching</h3>
+        <p>Generates concrete code fixes and technical explanations powered by Google Gemini 2.0 Flash.</p>
       </div>
     </div>
   </section>
@@ -57,16 +56,16 @@
     </div>
     <div class="features-grid">
       <div class="card">
+        <h3>Knowledge Base</h3>
+        <p>Hybrid storage with FAISS (Vectors) and Neo4j (Graph) for robust code retrieval.</p>
+      </div>
+      <div class="card">
+        <h3>LLM Integration</h3>
+        <p>Seamless integration with Gemini 2.0 for advanced code reasoning and generation.</p>
+      </div>
+      <div class="card">
         <h3>Event-Driven</h3>
-        <p>Built on Flask with asynchronous processing for high-throughput event handling.</p>
-      </div>
-      <div class="card">
-        <h3>Containerized</h3>
-        <p>Fully Dockerized for easy deployment and scalability across environments.</p>
-      </div>
-      <div class="card">
-        <h3>Thread-Safe</h3>
-        <p>Robust concurrency management ensures reliable operation under load.</p>
+        <p>Real-time processing of GitHub Webhooks for immediate feedback.</p>
       </div>
     </div>
   </section>
@@ -76,20 +75,21 @@
     <div class="features-grid" style="grid-template-columns: 1fr; max-width: 800px;">
       <div class="step">
         <h3>1. Clone & Configure</h3>
-        <p>Clone the repository and set up your environment variables.</p>
+        <p>Clone the repository and set up your environment variables (including Gemini API Key).</p>
         <pre>git clone https://github.com/your-repo/insight-tool.git
 cd insight-tool/INSIGHT\ Tool
 # Create .env file with your credentials</pre>
       </div>
       <div class="step">
-        <h3>2. Run with Docker</h3>
-        <p>Launch the entire stack with a single command.</p>
-        <pre>docker-compose up --build</pre>
+        <h3>2. Install Dependencies</h3>
+        <p>Install Python requirements and set up Neo4j.</p>
+        <pre>pip install -r requirements.txt</pre>
       </div>
       <div class="step">
-        <h3>3. Expose & Connect</h3>
-        <p>Use Ngrok to expose your local instance to GitHub.</p>
-        <pre>ngrok http 5000</pre>
+        <h3>3. Run & Connect</h3>
+        <p>Start the server and expose it via Ngrok.</p>
+        <pre>python main.py
+ngrok http 5000</pre>
       </div>
     </div>
   </section>

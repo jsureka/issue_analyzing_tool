@@ -1,9 +1,10 @@
 """
 Knowledge Base System - Main API for SPRINT integration
-Provides bug localization using dense retrieval
+Provides bug localization using dense retrieval and LangGraph workflow
 """
 
 import logging
+import threading
 from typing import Dict, Any, Optional
 
 from .KnowledgeBase.embedder import CodeEmbedder
@@ -11,8 +12,9 @@ from .KnowledgeBase.issue_processor import IssueProcessor
 from .KnowledgeBase.retriever import DenseRetriever
 from .KnowledgeBase.formatter import ResultFormatter
 from .KnowledgeBase.indexer import RepositoryIndexer
-from .KnowledgeBase.line_reranker import LineReranker
-from .KnowledgeBase.calibrator import ConfidenceCalibrator
+
+
+from .KnowledgeBase.workflow_manager import WorkflowManager
 
 # Configure logging
 logging.basicConfig(
@@ -20,8 +22,6 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
-
-import threading
 
 # Global instances (lazy loaded) with locks
 _embedder = None
@@ -36,11 +36,9 @@ _retriever_lock = threading.Lock()
 _formatter = None
 _formatter_lock = threading.Lock()
 
-_line_reranker = None
-_line_reranker_lock = threading.Lock()
 
-_calibrator = None
-_calibrator_lock = threading.Lock()
+
+
 
 
 def _get_embedder(model_name: str = "microsoft/unixcoder-base") -> CodeEmbedder:
@@ -85,24 +83,10 @@ def _get_formatter() -> ResultFormatter:
     return _formatter
 
 
-def _get_line_reranker() -> LineReranker:
-    """Get or create line reranker instance (Thread-Safe)"""
-    global _line_reranker
-    if _line_reranker is None:
-        with _line_reranker_lock:
-            if _line_reranker is None:
-                _line_reranker = LineReranker()
-    return _line_reranker
 
 
-def _get_calibrator() -> ConfidenceCalibrator:
-    """Get or create calibrator instance (Thread-Safe)"""
-    global _calibrator
-    if _calibrator is None:
-        with _calibrator_lock:
-            if _calibrator is None:
-                _calibrator = ConfidenceCalibrator()
-    return _calibrator
+
+
 
 
 def BugLocalization(issue_title: str, issue_body: str, repo_owner: str, 
@@ -132,8 +116,6 @@ def BugLocalization(issue_title: str, issue_body: str, repo_owner: str,
         
         # Get components
         retriever = _get_retriever()
-        issue_processor = _get_issue_processor()
-        formatter = _get_formatter()
         
         # Check if repository is indexed
         if not retriever.load_index(full_repo_name):
@@ -144,121 +126,51 @@ def BugLocalization(issue_title: str, issue_body: str, repo_owner: str,
                 'indexed': False,
                 'repository': full_repo_name
             }
-        
-        # Process issue
-        processed_issue = issue_processor.process_issue(issue_title, issue_body)
-        if processed_issue is None:
-            error_msg = "Failed to process issue text (too short or invalid)"
-            logger.error(error_msg)
+            
+        # Phase 2: Use LangGraph Workflow
+        try:
+            logger.info("Starting LangGraph Workflow...")
+            workflow_manager = WorkflowManager()
+            workflow_result = workflow_manager.run(
+                issue_title, 
+                issue_body, 
+                full_repo_name, 
+                repo_path
+            )
+            
+            # Get commit SHA (if not already in result)
+            import subprocess
+            try:
+                result = subprocess.run(
+                    ['git', 'rev-parse', 'HEAD'],
+                    cwd=repo_path,
+                    capture_output=True,
+                    text=True
+                )
+                commit_sha = result.stdout.strip() if result.returncode == 0 else "unknown"
+            except:
+                commit_sha = "unknown"
+                
+            workflow_result['commit_sha'] = commit_sha
+            workflow_result['branch'] = default_branch
+            
+            # Add confidence info (using calibrator on top result if available)
+            # if workflow_result.get('top_files'):
+            #     top_score = workflow_result['top_files'][0].get('score', 0.0)
+            #     calibrator = _get_calibrator()
+            #     overall_confidence, confidence_score = calibrator.calibrate_score(top_score)
+            #     workflow_result['confidence_level'] = overall_confidence
+            #     workflow_result['confidence_score'] = confidence_score
+            pass
+            
+            return workflow_result
+            
+        except Exception as e:
+            logger.error(f"Workflow failed: {e}", exc_info=True)
             return {
-                'error': error_msg,
+                'error': f"Workflow failed: {str(e)}",
                 'repository': full_repo_name
             }
-        
-        logger.info(f"Processed issue: {processed_issue.word_count} words")
-        
-        # Retrieve similar functions
-        results = retriever.retrieve(processed_issue.embedding, k=k)
-        
-        if not results:
-            logger.warning("No results found")
-            return {
-                'repository': full_repo_name,
-                'total_results': 0,
-                'top_files': [],
-                'message': 'No matching functions found'
-            }
-        
-        # Phase 4: Calibrate confidence based on top score
-        calibrator = _get_calibrator()
-        top_score = results[0].similarity_score if results else 0.0
-        overall_confidence, confidence_score = calibrator.calibrate_score(top_score)
-        
-        logger.info(f"Top score: {top_score:.3f} → {overall_confidence} confidence ({confidence_score:.2f})")
-        
-        # Get commit SHA
-        import subprocess
-        try:
-            result = subprocess.run(
-                ['git', 'rev-parse', 'HEAD'],
-                cwd=repo_path,
-                capture_output=True,
-                text=True
-            )
-            commit_sha = result.stdout.strip() if result.returncode == 0 else "unknown"
-        except:
-            commit_sha = "unknown"
-        
-        # Phase 3: Line-level reranking (optional)
-        line_results = None
-        if enable_line_level:
-            try:
-                logger.info("Performing line-level reranking...")
-                line_reranker = _get_line_reranker()
-                
-                # Load window index
-                from pathlib import Path
-                index_dir = Path("indices")
-                window_index_path = index_dir / f"{full_repo_name.replace('/', '_')}_windows.index"
-                window_metadata_path = index_dir / f"{full_repo_name.replace('/', '_')}_windows_metadata.json"
-                
-                if window_index_path.exists() and window_metadata_path.exists():
-                    if line_reranker.load_window_index(full_repo_name, str(window_index_path), str(window_metadata_path)):
-                        # Convert results to format expected by reranker
-                        function_results = []
-                        for result in results[:10]:  # Rerank top 10 functions
-                            function_results.append({
-                                'function_id': result.function_id,
-                                'function_name': result.function_name,
-                                'file_path': result.file_path,
-                                'start_line': result.start_line,
-                                'end_line': result.end_line,
-                                'similarity_score': result.similarity_score,
-                                'snippet': getattr(result, 'snippet', '')
-                            })
-                        
-                        line_results = line_reranker.rerank_functions(processed_issue.embedding, function_results)
-                        logger.info(f"Line-level reranking completed: {len(line_results)} results")
-                else:
-                    logger.info("Window index not found, skipping line-level reranking")
-            except Exception as e:
-                logger.warning(f"Line-level reranking failed: {e}")
-        
-        # Format results
-        repo_info = {
-            'repo_name': full_repo_name,
-            'commit_sha': commit_sha,
-            'branch': default_branch
-        }
-        
-        formatted_results = formatter.format_results(
-            results,
-            repo_info,
-            repo_path=repo_path,
-            top_n=10
-        )
-        
-        # Add line-level results if available
-        if line_results:
-            formatted_results['line_level_results'] = [
-                {
-                    'function_name': lr.function_name,
-                    'file_path': lr.file_path,
-                    'line_start': lr.line_start,
-                    'line_end': lr.line_end,
-                    'snippet': lr.snippet,
-                    'score': lr.similarity_score,
-                    'confidence': lr.confidence
-                }
-                for lr in line_results[:5]  # Top 5 line-level results
-            ]
-        
-        # Add confidence to results
-        formatted_results['confidence'] = overall_confidence
-        formatted_results['confidence_score'] = confidence_score
-        
-        logger.info(f"Successfully retrieved {len(results)} results with {overall_confidence} confidence")
-        return formatted_results
         
     except Exception as e:
         logger.error(f"Bug localization failed: {e}", exc_info=True)
@@ -266,7 +178,6 @@ def BugLocalization(issue_title: str, issue_body: str, repo_owner: str,
             'error': str(e),
             'repository': f"{repo_owner}/{repo_name}"
         }
-
 
 
 def IndexRepository(repo_path: str, repo_name: str, 

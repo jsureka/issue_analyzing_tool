@@ -243,49 +243,32 @@ class CommentGenerator:
         return section
     
     def generate_comment(self, results: Dict[str, Any], confidence: str = "medium", 
-                        confidence_score: float = 0.5) -> str:
+                        confidence_score: float = 0.5) -> List[str]:
         """
-        Generate complete GitHub comment from retrieval results
+        Generate complete GitHub comments from retrieval results
         
         Args:
             results: Formatted results dictionary from ResultFormatter
-            confidence: Overall confidence level ("high", "medium", "low")
-            confidence_score: Calibrated probability score (0-1)
+            confidence: Overall confidence level (unused)
+            confidence_score: Calibrated probability score (unused)
             
         Returns:
-            Markdown-formatted GitHub comment
+            List of Markdown-formatted GitHub comments
         """
         try:
             # Extract data
             repo_name = results.get('repository', 'unknown')
             commit_sha = results.get('commit_sha', 'HEAD')
-            branch = results.get('branch', 'main') # Get branch
-            timestamp = results.get('timestamp', datetime.utcnow().isoformat() + 'Z')
-            total_results = results.get('total_results', 0)
+            branch = results.get('branch', 'main')
             top_files = results.get('top_files', [])
-            line_level_results = results.get('line_level_results', [])
             
-            # Start building comment
-            comment = "## 🔍 Bug Localization Results\n\n"
+            comments = []
             
-            # Add confidence badge
-            comment += self._get_confidence_badge(confidence, confidence_score) + "\n\n"
-            
-            # Add intro
-            comment += "I've analyzed this issue and identified the most likely locations for the bug:\n\n"
-            
-            # Add line-level results if available (Phase 3)
-            if line_level_results:
-                comment += "### 🎯 Precise Line-Level Locations\n\n"
-                comment += "*Fine-grained analysis pinpointing specific line ranges:*\n\n"
-                
-                for i, line_result in enumerate(line_level_results[:3], 1):  # Top 3 line-level
-                    comment += self._format_line_level_section(line_result, i, branch)
-                
-                comment += "\n---\n\n"
+            # --- Comment 1: Localization Results ---
+            comment1 = "## 🔍 INSIGHT Bug Localization Results\n\n"
             
             # Add top candidate functions (limit to top 3)
-            comment += "### Top Candidate Functions\n"
+            comment1 += "### Relevant functions where the bug is likely to occur\n\n"
             
             # Flatten functions from all files
             all_functions = []
@@ -293,7 +276,7 @@ class CommentGenerator:
                 file_path = file_data.get('file_path', '')
                 file_language = file_data.get('language', 'python')
                 for func in file_data.get('functions', []):
-                    func['file_path'] = file_path # Ensure file path is available
+                    func['file_path'] = file_path
                     func['language'] = file_language
                     all_functions.append(func)
             
@@ -304,32 +287,46 @@ class CommentGenerator:
             rank = 1
             for func in all_functions[:3]:
                 file_path = func.get('file_path', '')
-                # Use file language if function language is not specific
-                func_language = func.get('language', 'python')
+                func_name = func.get('name', 'unknown')
+                line_range = func.get('line_range', [0, 0])
+                score = func.get('score', 0.0)
+                permalink = self._generate_github_permalink(file_path, line_range[0], line_range[1], branch)
                 
-                comment += self._format_function_section(func, rank, file_path, branch, func_language)
+                # Compact format
+                comment1 += f"{rank}. **`{func_name}`** in `{file_path}`\n"
+                comment1 += f"   [Lines {line_range[0]}-{line_range[1]}]({permalink})\n\n"
                 rank += 1
             
-            # Add summary section
-            comment += "\n---\n\n### Summary\n\n"
-            comment += f"- **Total functions analyzed:** {total_results:,}\n"
-            comment += f"- **Commit:** `{commit_sha[:7]}...`\n"
-            comment += f"- **Indexed:** {timestamp}\n\n"
+            comments.append(comment1)
             
-            # Add confidence label info
-            confidence_label = f"bug-localization:{confidence.lower()}-confidence"
-            comment += f"**Labels applied:** `{confidence_label}`\n\n"
+            # --- Comment 2: Technical Analysis ---
+            llm_analysis = results.get('llm_analysis')
+            llm_hypothesis = results.get('llm_hypothesis')
             
-            # Add footer
-            comment += "---\n\n"
-            comment += "*This analysis was generated by SPRINT's Knowledge Base System.*\n"
+            if llm_analysis or llm_hypothesis:
+                comment2 = "## 🧠 Technical Analysis\n\n"
+                if llm_analysis:
+                     comment2 += f"{llm_analysis}\n\n"
+                if llm_hypothesis:
+                     comment2 += f"**Hypothesis:**\n{llm_hypothesis}\n"
+                comments.append(comment2)
             
-            logger.info(f"Generated comment with {rank-1} functions, confidence: {confidence}")
-            return comment
+            # --- Comment 3: Suggested Patch ---
+            llm_patch = results.get('llm_patch')
+            if llm_patch:
+                comment3 = "## 🛠️ Suggested Solution\n\n"
+                # Check if it looks like code or text, but user requested bullet points/steps by default
+                # We will rely on the LLM prompt to format this correctly as bullet points or code
+                comment3 += f"{llm_patch}\n\n"
+                comment3 += "> ⚠️ **Note:** This solution is AI-generated. Please review carefully.\n"
+                comments.append(comment3)
+
+            logger.info(f"Generated {len(comments)} comments")
+            return comments
             
         except Exception as e:
             logger.error(f"Failed to generate comment: {e}")
-            return self._generate_error_comment(str(e))
+            return [self._generate_error_comment(str(e))]
     
     def _generate_error_comment(self, error_msg: str) -> str:
         """
@@ -341,7 +338,7 @@ class CommentGenerator:
         Returns:
             Markdown-formatted error comment
         """
-        comment = "## 🔍 Bug Localization Results\n\n"
+        comment = "## 🔍 INSIGHT Bug Localization Results\n\n"
         comment += "⚠️ **Error:** Unable to complete bug localization.\n\n"
         comment += f"```\n{error_msg}\n```\n\n"
         comment += "*Please check the logs for more details.*\n"

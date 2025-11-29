@@ -31,6 +31,11 @@ class Config:
     NEO4J_USER = os.getenv('NEO4J_USER', 'neo4j')
     NEO4J_PASSWORD = os.getenv('NEO4J_PASSWORD', 'password')
     
+    # LLM (Phase 2)
+    GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
+    LLM_MODEL_NAME = os.getenv('LLM_MODEL_NAME', 'gemini-2.0-flash')
+    LLM_TEMPERATURE = float(os.getenv('LLM_TEMPERATURE', 0.2))
+    
     # Paths
     # Use a fixed path for repos instead of tempdir for persistence if needed, 
     # or keep tempdir but make it configurable.

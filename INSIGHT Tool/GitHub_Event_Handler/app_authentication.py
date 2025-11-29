@@ -11,7 +11,7 @@ load_dotenv()
 def generate_jwt():
     try:
         iat = int(time.time())
-        exp = iat + 60 * 10
+        exp = iat + 60 * 9
         iss = os.environ.get('GITHUB_APP_ID')
 
         private_key_str = os.environ.get('GITHUB_PRIVATE_KEY')
