@@ -280,36 +280,36 @@ class PythonParser(LanguageParser):
     
     def extract_calls(self, tree, source_code: bytes) -> Dict[str, List[str]]:
         """
-        Extract function calls within each function
+        Extract function calls and references within each function
         
         Args:
             tree: Tree-sitter tree object
             source_code: Source code as bytes
             
         Returns:
-            Dictionary mapping function names to lists of called function names
+            Dictionary mapping function names to lists of called/referenced function names
         """
         calls_map = {}
-        current_function = None
         
         def traverse(node, in_function: Optional[str] = None):
-            """Recursively traverse to find function calls"""
-            nonlocal current_function
+            """Recursively traverse to find function calls and references"""
             
             if node.type == 'function_definition':
                 # Extract function name
                 func_name = None
+                body_node = None
+                
                 for child in node.children:
                     if child.type == 'identifier':
                         func_name = self._get_node_text(child, source_code)
-                        break
+                    elif child.type == 'block':
+                        body_node = child
                 
-                if func_name:
+                if func_name and body_node:
                     calls_map[func_name] = []
-                    # Traverse function body with context
-                    for child in node.children:
-                        traverse(child, func_name)
-                return  # Don't traverse children again
+                    # Traverse ONLY the function body to avoid capturing params
+                    traverse(body_node, func_name)
+                return  # Don't traverse children again (we handled body manually)
             
             elif node.type == 'call':
                 # This is a function call
@@ -328,6 +328,13 @@ class PythonParser(LanguageParser):
                                 calls_map[in_function].append(called_name)
                             break
             
+            elif node.type == 'identifier':
+                # This is a potential function reference (e.g. passed as argument)
+                if in_function:
+                    name = self._get_node_text(node, source_code)
+                    if name not in calls_map.get(in_function, []):
+                        calls_map[in_function].append(name)
+
             # Recursively traverse children
             for child in node.children:
                 traverse(child, in_function)

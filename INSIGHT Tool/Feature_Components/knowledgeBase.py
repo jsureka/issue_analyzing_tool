@@ -12,6 +12,8 @@ from .KnowledgeBase.issue_processor import IssueProcessor
 from .KnowledgeBase.retriever import DenseRetriever
 from .KnowledgeBase.formatter import ResultFormatter
 from .KnowledgeBase.indexer import RepositoryIndexer
+from .KnowledgeBase.graph_store import GraphStore
+from .KnowledgeBase.llm_service import LLMService
 
 
 from .KnowledgeBase.workflow_manager import WorkflowManager

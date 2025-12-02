@@ -183,3 +183,4 @@ cython_debug/
 .kiro
 
 Data_Storage
+temp_repos/

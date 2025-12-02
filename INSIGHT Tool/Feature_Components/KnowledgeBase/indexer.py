@@ -278,7 +278,7 @@ class RepositoryIndexer:
         window_generator = WindowGenerator(
             tokenizer=self.embedder.tokenizer if hasattr(self.embedder, 'tokenizer') else None,
             window_size=48,
-            stride=24
+            stride=40 # Optimized stride
         )
         
         # Read file contents for window extraction
@@ -286,7 +286,7 @@ class RepositoryIndexer:
         for file_path in python_files:
             try:
                 with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                    relative_path = str(file_path.relative_to(repo_path))
+                    relative_path = file_path.relative_to(repo_path).as_posix()
                     file_contents[relative_path] = f.read()
             except Exception as e:
                 logger.warning(f"Could not read file for windows: {file_path}: {e}")
@@ -300,7 +300,7 @@ class RepositoryIndexer:
         
         if all_windows:
             logger.info(f"Generating embeddings for {len(all_windows)} windows...")
-            window_embeddings = self.embedder.embed_windows(all_windows, batch_size=64)
+            window_embeddings = self.embedder.embed_windows(all_windows, batch_size=128) # Optimized batch size
             window_vector_store.add_window_vectors(window_embeddings, all_windows)
             
         # Save indices
@@ -409,12 +409,17 @@ class RepositoryIndexer:
                 else:
                     self.graph_store.create_contains_relationship(file_id, func_id)
             
+            # Create helper map for function start lines
+            func_start_lines = {f.name: str(f.start_line) for f in file_info['functions']}
+
             # Create CALLS relationships
             calls_map = file_info['calls']
             for caller_name, callees in calls_map.items():
-                caller_id = self._generate_id(repo_name, file_path, caller_name, "")
-                for callee_name in callees:
-                    self.graph_store.create_calls_relationship(caller_id, callee_name)
+                if caller_name in func_start_lines:
+                    start_line = func_start_lines[caller_name]
+                    caller_id = self._generate_id(repo_name, file_path, caller_name, start_line)
+                    for callee_name in callees:
+                        self.graph_store.create_calls_relationship(caller_id, callee_name)
 
     def _generate_directory_summaries(self, repo_name: str, file_info_map: Dict[str, Any]):
         """

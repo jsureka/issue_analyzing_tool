@@ -513,6 +513,72 @@ class GraphStore:
             logger.error(f"Failed to get directory summaries: {e}")
             return []
 
+    def get_functions_in_file(self, file_path: str) -> List[Dict[str, Any]]:
+        """
+        Retrieve all functions defined in a specific file.
+        
+        Args:
+            file_path: The file path (relative to repo root)
+            
+        Returns:
+            List of function nodes (dict)
+        """
+        self._ensure_connected()
+        query = """
+        MATCH (f:File {path: $file_path})-[:CONTAINS]->(func:Function)
+        RETURN func
+        """
+        try:
+            with self.driver.session() as session:
+                result = session.run(query, file_path=file_path)
+                functions = []
+                for record in result:
+                    node = record['func']
+                    # Convert Neo4j node to dict and ensure ID is present
+                    func_data = dict(node)
+                    # Ensure essential fields are present
+                    if 'id' not in func_data:
+                        func_data['id'] = node.element_id # Fallback if id property missing
+                    functions.append(func_data)
+                return functions
+        except Exception as e:
+            logger.error(f"Failed to get functions in file {file_path}: {e}")
+            return []
+
+    def get_function_neighbors(self, function_ids: List[str]) -> Dict[str, Dict[str, List[str]]]:
+        """
+        Get immediate neighbors (callers and callees) for a list of functions.
+        
+        Args:
+            function_ids: List of function IDs
+            
+        Returns:
+            Dict mapping function_id to {'callers': [], 'callees': []}
+        """
+        self._ensure_connected()
+        query = """
+        MATCH (f:Function)
+        WHERE f.id IN $function_ids
+        OPTIONAL MATCH (caller:Function)-[:CALLS]->(f)
+        OPTIONAL MATCH (f)-[:CALLS]->(callee:Function)
+        RETURN f.id as func_id, 
+               collect(DISTINCT caller.name) as callers,
+               collect(DISTINCT callee.name) as callees
+        """
+        try:
+            with self.driver.session() as session:
+                result = session.run(query, function_ids=function_ids)
+                neighbors = {}
+                for record in result:
+                    neighbors[record['func_id']] = {
+                        'callers': [c for c in record['callers'] if c],
+                        'callees': [c for c in record['callees'] if c]
+                    }
+                return neighbors
+        except Exception as e:
+            logger.error(f"Failed to get function neighbors: {e}")
+            return {}
+
     def get_context_subgraph(self, function_ids: List[str], depth: int = 1) -> str:
         """
         Retrieve a subgraph context for a list of functions

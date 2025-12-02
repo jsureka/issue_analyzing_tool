@@ -33,7 +33,7 @@ class Config:
     
     # LLM (Phase 2)
     GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
-    LLM_MODEL_NAME = os.getenv('LLM_MODEL_NAME', 'gemini-2.0-flash')
+    LLM_MODEL_NAME = os.getenv('LLM_MODEL_NAME', 'gemini-2.5-flash')
     LLM_TEMPERATURE = float(os.getenv('LLM_TEMPERATURE', 0.2))
     
     # Paths
