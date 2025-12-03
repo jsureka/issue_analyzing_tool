@@ -80,15 +80,23 @@ class WorkflowManager:
             state["issue_body"]
         )
         
-        # Format analysis from the reasoning of selected functions
-        analysis = "Bug Localization Analysis:\n"
-        for func in selected_functions:
-            analysis += f"- Function {func['name']} in {func['file_path']}: {func.get('llm_reasoning', 'No reasoning provided')}\n"
+        # Format concise analysis from top 3 functions only
+        analysis = "**Bug Localization:**\n\n"
+        top_funcs = [f for f in selected_functions[:3] if f.get('llm_reasoning')]
+        
+        if top_funcs:
+            for idx, func in enumerate(top_funcs, 1):
+                analysis += f"{idx}. `{func['name']}` in `{func['file_path']}`\n"
+                analysis += f"   - {func.get('llm_reasoning', 'Selected as likely buggy function')}\n\n"
+        else:
+            # Fallback if no reasoning
+            for idx, func in enumerate(selected_functions[:3], 1):
+                analysis += f"{idx}. `{func['name']}` in `{func['file_path']}`\n\n"
             
         return {
             "candidate_functions": selected_functions,
             "analysis": analysis,
-            "hypothesis": analysis # Use analysis as hypothesis
+            "hypothesis": analysis
         }
 
     def generate_patch(self, state: GraphState) -> Dict[str, Any]:

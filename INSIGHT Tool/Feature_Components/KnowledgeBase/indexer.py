@@ -286,10 +286,6 @@ class RepositoryIndexer:
         # Close connections
         self.graph_store.close()
         
-        # Generate directory summaries (GraphRAG)
-        logger.info("Generating directory summaries...")
-        self._generate_directory_summaries(repo_name, file_info_map)
-        
         elapsed_time = time.time() - start_time
         logger.info(f"Indexing completed in {elapsed_time:.2f} seconds")
         
@@ -380,55 +376,6 @@ class RepositoryIndexer:
                     for callee_name in callees:
                         self.graph_store.create_calls_relationship(caller_id, callee_name)
 
-    def _generate_directory_summaries(self, repo_name: str, file_info_map: Dict[str, Any]):
-        """
-        Generate summaries for directories (GraphRAG)
-        """
-        if not self.llm_service.is_available():
-            logger.warning("LLM service unavailable, skipping directory summarization")
-            return
-
-        # Group files by directory
-        dirs = {}
-        for file_path, info in file_info_map.items():
-            dir_path = str(Path(file_path).parent).replace('\\', '/')
-            if dir_path == '.':
-                dir_path = 'root'
-            
-            if dir_path not in dirs:
-                dirs[dir_path] = []
-            dirs[dir_path].append(info)
-        
-        # Generate summary for each directory
-        for dir_path, files in dirs.items():
-            try:
-                # Create context for LLM
-                context = f"Directory: {dir_path}\n\nFiles:\n"
-                for f in files:
-                    context += f"- {Path(f['path']).name}: "
-                    # Add function signatures
-                    funcs = [func.name for func in f['functions']]
-                    if funcs:
-                        context += f"Contains functions: {', '.join(funcs[:5])}..."
-                    context += "\n"
-                
-                # Generate summary
-                summary = self.llm_service.summarize_code(context, dir_path)
-                
-                # Create directory node
-                dir_id = self._generate_id(repo_name, dir_path)
-                self.graph_store.create_directory_node(dir_id, repo_name, dir_path, summary)
-                
-                # Link directory to files
-                for f in files:
-                    file_id = f['id']
-                    # We reuse CONTAINS for Directory -> File
-                    self.graph_store.create_contains_relationship(dir_id, file_id)
-                    
-                logger.info(f"Generated summary for directory: {dir_path}")
-                
-            except Exception as e:
-                logger.error(f"Failed to summarize directory {dir_path}: {e}")
 
     def get_index_status(self, repo_name: str) -> Optional[Dict[str, Any]]:
         """

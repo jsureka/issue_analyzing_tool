@@ -184,3 +184,5 @@ cython_debug/
 
 Data_Storage
 temp_repos/
+*INSIGHT Tool/insight_repos/
+*INSIGHT Tool/telemetry_logs/

@@ -9,8 +9,21 @@ from .getCodeFiles import fetch_all_code_files
 from .createCommentBugLocalization import CreateCommentBL, BLStartingCommentForWaiting, CreateErrorComment
 from .app_authentication import authenticate_github_app
 from Feature_Components.knowledgeBase import BugLocalization as KBBugLocalization, GetIndexStatus
-from Data_Storage.dbOperations import create_table_if_not_exists, is_table_exists, insert_issue_to_db, delete_issue_from_db
+# from Data_Storage.dbOperations import create_table_if_not_exists, is_table_exists, insert_issue_to_db, delete_issue_from_db
 from Feature_Components.KnowledgeBase.telemetry import get_telemetry_logger
+
+# Stub functions for database operations (Data_Storage not available)
+def create_table_if_not_exists(repo_name):
+    pass
+
+def is_table_exists(repo_name):
+    return False
+
+def insert_issue_to_db(repo_name, issue_id, title, body, created_at, url, labels):
+    pass
+
+def delete_issue_from_db(repo_name, issue_id):
+    pass
 
 
 logger = logging.getLogger(__name__)

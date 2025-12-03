@@ -23,8 +23,8 @@
   </header>
 
   <section class="hero">
-    <h1>Agentic Bug Localization & Repair</h1>
-    <p>Accelerate your debugging workflow with AI-powered analysis, hypothesis generation, and automated patching using Gemini 2.0 and GraphRAG.</p>
+    <h1>RAG-Based Bug Localization & Analysis</h1>
+    <p>Accelerate your debugging workflow with AI-powered bug localization using dense retrieval, knowledge graph enrichment, and LLM-driven analysis.</p>
     <a href="#usage" class="cta-button">Install Now</a>
   </section>
 
@@ -32,19 +32,19 @@
     <h2>Core Capabilities</h2>
     <div class="features-grid">
       <div class="card">
-        <span class="icon">🤖</span>
-        <h3>Agentic Workflow</h3>
-        <p>Uses LangGraph to orchestrate a multi-step reasoning process: Retrieve -> Analyze -> Hypothesize -> Patch.</p>
+        <span class="icon">🔍</span>
+        <h3>RAG Pipeline</h3>
+        <p>Dense vector retrieval (FAISS + UnixCoder) retrieves top-20 candidate functions, enriched with graph context from Neo4j.</p>
       </div>
       <div class="card">
-        <span class="icon">🕸️</span>
-        <h3>GraphRAG Context</h3>
-        <p>Combines vector search with knowledge graph traversals (Neo4j) and directory summaries for deep architectural understanding.</p>
+        <span class="icon">🧠</span>
+        <h3>LLM Selection</h3>
+        <p>GPT-4o or Gemini 2.0 Flash intelligently selects top-5 most likely buggy functions from enriched candidates.</p>
       </div>
       <div class="card">
         <span class="icon">✨</span>
-        <h3>Automated Patching</h3>
-        <p>Generates concrete code fixes and technical explanations powered by Google Gemini 2.0 Flash.</p>
+        <h3>Smart Query Generation</h3>
+        <p>LLM generates optimized search queries from issue descriptions for more accurate retrieval.</p>
       </div>
     </div>
   </section>
@@ -61,7 +61,7 @@
       </div>
       <div class="card">
         <h3>LLM Integration</h3>
-        <p>Seamless integration with Gemini 2.0 for advanced code reasoning and generation.</p>
+        <p>Supports GPT-4o and Gemini 2.0 Flash for query generation, function selection, and analysis.</p>
       </div>
       <div class="card">
         <h3>Event-Driven</h3>

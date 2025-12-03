@@ -130,24 +130,35 @@ def process_language(lang_code, num_repos=3, min_issues=10):
         print(f"No data found for {lang_code}")
         return []
 
-    # Group by repository
+    # Group by repository and collect repo metadata from dataset
     repo_issues = {}
+    repo_metadata = {}
     
     print(f"Total examples in {lang_code}: {len(all_ds)}")
     
     for item in all_ds:
-        # Try to get repo info from html_url or issue_url
-        url = item.get('html_url') or item.get('issue_url')
-        if not url:
-            continue
-            
-        owner, name = get_repo_info(url)
+        # Get repo info from dataset fields
+        owner = item.get('repo_owner')
+        name = item.get('repo_name')
+        
         if not owner or not name:
-            continue
+            # Fallback: Try to get from URL
+            url = item.get('html_url') or item.get('issue_url')
+            if url:
+                owner, name = get_repo_info(url)
+            if not owner or not name:
+                continue
             
         repo_full_name = f"{owner}/{name}"
         if repo_full_name not in repo_issues:
             repo_issues[repo_full_name] = []
+            # Store repo metadata from dataset (no API calls needed!)
+            repo_metadata[repo_full_name] = {
+                'file_count': item.get('repo_files_without_tests_count', 0),
+                'lines_count': item.get('repo_lines_count', 0),
+                'stars': item.get('repo_stars', 0),
+                'language': item.get('repo_language', lang_code)
+            }
         
         repo_issues[repo_full_name].append(item)
     
@@ -155,31 +166,16 @@ def process_language(lang_code, num_repos=3, min_issues=10):
     valid_repos_list = [k for k, v in repo_issues.items() if len(v) >= min_issues]
     print(f"Found {len(valid_repos_list)} repositories with >= {min_issues} issues.")
     
-    # Fetch details for valid repos to sort by size
-    repo_details_map = {}
-    print("Fetching repository details (size, file count)...")
-    
-    # Limit checking to avoid massive wait times if there are hundreds of repos
-    # But user asked for smallest, so we should try to check as many as reasonable.
-    # Let's check up to 50 candidates.
-    candidates = valid_repos_list[:50] 
-    if len(valid_repos_list) > 50:
-        print(f"Warning: Checking only first 50 repositories out of {len(valid_repos_list)} to avoid rate limits.")
-    
-    for repo_full_name in candidates:
-        owner, name = repo_full_name.split('/')
-        details = get_repo_details(owner, name)
-        if details:
-            repo_details_map[repo_full_name] = details
-            print(f"  {repo_full_name}: Size={details['size']}KB, Files={details['file_count']}")
-        time.sleep(0.5) # Slight delay to be nice to API
-        
-    # Sort by size (ascending)
-    # Filter out repos where we couldn't get details
+    # Sort by file count (ascending) - no API calls needed!
     sorted_repos_by_size = sorted(
-        [r for r in repo_details_map.keys()],
-        key=lambda r: repo_details_map[r]['size']
+        valid_repos_list,
+        key=lambda r: repo_metadata[r]['file_count']
     )
+    
+    print(f"\nSmallest repositories by file count:")
+    for repo in sorted_repos_by_size[:num_repos]:
+        meta = repo_metadata[repo]
+        print(f"  {repo}: Files={meta['file_count']}, Lines={meta['lines_count']}, Stars={meta['stars']}")
     
     # Take top N smallest
     selected_repo_names = sorted_repos_by_size[:num_repos]
@@ -188,8 +184,8 @@ def process_language(lang_code, num_repos=3, min_issues=10):
     
     for repo_name in selected_repo_names:
         issues = repo_issues[repo_name]
-        details = repo_details_map[repo_name]
-        print(f"  Extracting from {repo_name} (Size: {details['size']}KB, Files: {details['file_count']})...")
+        meta = repo_metadata[repo_name]
+        print(f"\n  Extracting from {repo_name} (Files: {meta['file_count']}, Lines: {meta['lines_count']})...")
         
         # Take up to 10 issues
         selected_issues = issues[:10] 
@@ -203,8 +199,8 @@ def process_language(lang_code, num_repos=3, min_issues=10):
                 'Language': lang_code,
                 'Repository': repo_name,
                 'Repo Link': f"https://github.com/{repo_name}",
-                'Repo Size (KB)': details['size'],
-                'Total Files': details['file_count'],
+                'Repo Size (KB)': meta.get('lines_count', 0) // 50,  # Rough estimate: ~50 lines per KB
+                'Total Files': meta['file_count'],
                 'Issue Title': issue.get('issue_title'),
                 'Issue Description': issue.get('issue_body'),
                 'Issue URL': issue.get('html_url') or issue.get('issue_url'),
@@ -218,31 +214,73 @@ def process_language(lang_code, num_repos=3, min_issues=10):
     return extracted_data
 
 def main():
-    all_data = []
+    output_file = 'test_dataset.xlsx'
+    csv_fallback = 'test_dataset.csv'
+    
+    # Load existing data if file exists
+    existing_data = []
+    existing_issue_urls = set()
+    
+    if os.path.exists(output_file):
+        print(f"Found existing dataset: {output_file}")
+        try:
+            existing_df = pd.read_excel(output_file)
+            existing_data = existing_df.to_dict('records')
+            existing_issue_urls = set(existing_df['Issue URL'].dropna().values)
+            print(f"Loaded {len(existing_data)} existing rows")
+            
+            # Create backup
+            from datetime import datetime
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            backup_file = f'test_dataset_backup_{timestamp}.xlsx'
+            existing_df.to_excel(backup_file, index=False)
+            print(f"Created backup: {backup_file}")
+        except Exception as e:
+            print(f"Could not load existing Excel file: {e}")
+            # Try CSV fallback
+            if os.path.exists(csv_fallback):
+                print(f"Trying to load from CSV: {csv_fallback}")
+                existing_df = pd.read_csv(csv_fallback)
+                existing_data = existing_df.to_dict('records')
+                existing_issue_urls = set(existing_df['Issue URL'].dropna().values)
+                print(f"Loaded {len(existing_data)} existing rows from CSV")
+    
+    all_data = existing_data.copy()
     
     # Python
     py_data = process_language('py')
-    all_data.extend(py_data)
+    new_py_count = 0
+    for row in py_data:
+        if row['Issue URL'] not in existing_issue_urls:
+            all_data.append(row)
+            existing_issue_urls.add(row['Issue URL'])
+            new_py_count += 1
+    print(f"Added {new_py_count} new Python issues (skipped {len(py_data) - new_py_count} duplicates)")
     
     # Java
     java_data = process_language('java')
-    all_data.extend(java_data)
+    new_java_count = 0
+    for row in java_data:
+        if row['Issue URL'] not in existing_issue_urls:
+            all_data.append(row)
+            existing_issue_urls.add(row['Issue URL'])
+            new_java_count += 1
+    print(f"Added {new_java_count} new Java issues (skipped {len(java_data) - new_java_count} duplicates)")
     
     if not all_data:
-        print("No data extracted!")
+        print("No data to save!")
         return
 
     df = pd.DataFrame(all_data)
-    output_file = 'test_dataset.xlsx'
     
-    print(f"Saving {len(df)} rows to {output_file}...")
+    print(f"\nSaving {len(df)} total rows ({len(existing_data)} existing + {new_py_count + new_java_count} new) to {output_file}...")
     try:
         df.to_excel(output_file, index=False)
         print("Done!")
     except ImportError:
         print("openpyxl not installed. Saving as CSV instead.")
-        df.to_csv('test_dataset.csv', index=False)
-        print("Saved to test_dataset.csv")
+        df.to_csv(csv_fallback, index=False)
+        print(f"Saved to {csv_fallback}")
 
 if __name__ == "__main__":
     main()

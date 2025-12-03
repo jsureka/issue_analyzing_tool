@@ -1,9 +1,22 @@
 import logging
 from Issue_Indexer.getAllIssues import fetch_repository_issues
-from Data_Storage.dbOperations import insert_issue_to_db, create_table_if_not_exists, delete_table
+# from Data_Storage.dbOperations import insert_issue_to_db, create_table_if_not_exists, delete_table
 from concurrent.futures import ThreadPoolExecutor
 
 logger = logging.getLogger(__name__)
+
+# Stub functions for database operations (Data_Storage not available)
+def create_table_if_not_exists(repo_name):
+    logger.debug(f"Stub: create_table_if_not_exists called for {repo_name}")
+    pass
+
+def insert_issue_to_db(repo_name, issue_id, title, body, created_at, url, labels):
+    logger.debug(f"Stub: insert_issue_to_db called for {repo_name} issue #{issue_id}")
+    pass
+
+def delete_table(repo_name):
+    logger.debug(f"Stub: delete_table called for {repo_name}")
+    pass
 
 def process_installation_event(repo_full_name, repo_default_branch, action):
     """

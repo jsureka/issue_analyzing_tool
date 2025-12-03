@@ -7,7 +7,7 @@ from GitHub_Event_Handler.processIssueEvents import process_issue_event
 from GitHub_Event_Handler.processPushEvents import process_push_event
 from GitHub_Event_Handler.processInstallationEvents import process_installation_event
 from Issue_Indexer.getAllIssues import fetch_repository_issues
-from Data_Storage.dbOperations import insert_issue_to_db, create_table_if_not_exists, delete_table
+# from Data_Storage.dbOperations import insert_issue_to_db, create_table_if_not_exists, delete_table
 
 # Initialize App
 app = Flask(__name__)
