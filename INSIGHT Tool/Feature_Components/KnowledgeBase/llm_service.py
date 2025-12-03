@@ -8,6 +8,10 @@ import os
 from typing import Dict, Any, Optional, List
 import google.generativeai as genai
 from langchain_google_genai import ChatGoogleGenerativeAI
+try:
+    from langchain_openai import ChatOpenAI
+except ImportError:
+    ChatOpenAI = None
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.prompts import ChatPromptTemplate
 
@@ -20,6 +24,7 @@ except ImportError:
         # Fallback for testing if config is not found
         class Config:
             GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
+            OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
             LLM_MODEL_NAME = os.getenv('LLM_MODEL_NAME', 'gemma-3-4b')
             LLM_TEMPERATURE = float(os.getenv('LLM_TEMPERATURE', 0.2))
 
@@ -37,26 +42,54 @@ class LLMService:
             model_name: Model name (defaults to config)
         """
         self.api_key = api_key or Config.GEMINI_API_KEY
+        self.openai_api_key = Config.OPENAI_API_KEY
         self.model_name = model_name or Config.LLM_MODEL_NAME
         self.temperature = Config.LLM_TEMPERATURE
         
-        if not self.api_key:
-            logger.warning("GEMINI_API_KEY not set. LLM features will be disabled.")
-            self.llm = None
-            return
+        self.provider = "google"
+        if self.model_name.startswith("gpt"):
+            self.provider = "openai"
+        
+        if self.provider == "google":
+            if not self.api_key:
+                logger.warning("GEMINI_API_KEY not set. LLM features will be disabled.")
+                self.llm = None
+                return
+                
+            try:
+                genai.configure(api_key=self.api_key)
+                self.llm = ChatGoogleGenerativeAI(
+                    model=self.model_name,
+                    google_api_key=self.api_key,
+                    temperature=self.temperature,
+                    convert_system_message_to_human=True
+                )
+                logger.info(f"LLM Service initialized with Google model: {self.model_name}")
+            except Exception as e:
+                logger.error(f"Failed to initialize Google LLM: {e}")
+                self.llm = None
+        
+        elif self.provider == "openai":
+            if not self.openai_api_key:
+                logger.warning("OPENAI_API_KEY not set. LLM features will be disabled.")
+                self.llm = None
+                return
             
-        try:
-            genai.configure(api_key=self.api_key)
-            self.llm = ChatGoogleGenerativeAI(
-                model=self.model_name,
-                google_api_key=self.api_key,
-                temperature=self.temperature,
-                convert_system_message_to_human=True
-            )
-            logger.info(f"LLM Service initialized with model: {self.model_name}")
-        except Exception as e:
-            logger.error(f"Failed to initialize LLM Service: {e}")
-            self.llm = None
+            if ChatOpenAI is None:
+                logger.error("langchain_openai not installed. Please install it to use OpenAI models.")
+                self.llm = None
+                return
+
+            try:
+                self.llm = ChatOpenAI(
+                    model=self.model_name,
+                    api_key=self.openai_api_key,
+                    temperature=self.temperature
+                )
+                logger.info(f"LLM Service initialized with OpenAI model: {self.model_name}")
+            except Exception as e:
+                logger.error(f"Failed to initialize OpenAI LLM: {e}")
+                self.llm = None
 
     def is_available(self) -> bool:
         """Check if LLM service is available"""
@@ -225,7 +258,9 @@ Generate the solution plan:""")
                     return func(*args, **kwargs)
                 except Exception as e:
                     error_msg = str(e).lower()
-                    if "429" in error_msg or "quota" in error_msg or "rate limit" in error_msg:
+                    is_rate_limit = "429" in error_msg or "quota" in error_msg or "rate limit" in error_msg or "ratelimit" in error_msg
+                    
+                    if is_rate_limit:
                         if attempt == max_retries - 1:
                             logger.error(f"Max retries ({max_retries}) exceeded for rate limit.")
                             raise
@@ -366,6 +401,8 @@ Provide the JSON analysis and ranking:""")
             return reranked_candidates
 
         except Exception as e:
+            if "429" in str(e) or "quota" in str(e).lower() or "rate limit" in str(e).lower():
+                raise
             logger.error(f"Error reranking candidates: {e}")
             return candidates
 
@@ -391,7 +428,7 @@ Provide the JSON analysis and ranking:""")
             prompt = ChatPromptTemplate.from_messages([
                 ("system", """You are an expert software engineer. Your task is to identify the files that likely contain the bug described in the issue.
 You will be given a list of candidate file paths from the repository.
-Select the top 3-5 files that are most relevant to the issue.
+Select the top 1-3 files that are most relevant to the issue.
 Consider the file names and their likely responsibilities.
 
 Return a JSON object with a single key "selected_files" containing the list of file paths.
@@ -433,6 +470,8 @@ Select the relevant files:""")
             return valid_selected
 
         except Exception as e:
+            if "429" in str(e) or "quota" in str(e).lower() or "rate limit" in str(e).lower():
+                raise
             logger.error(f"Error filtering files: {e}")
             return file_paths[:3] # Fallback
 
@@ -475,22 +514,24 @@ Select the relevant files:""")
 Your task is to identify the **ROOT CAUSE** function(s) that need to be modified to fix the bug.
 
 **CRITICAL INSTRUCTIONS**:
-1.  **Look Deeper**: Do not just pick the public entry point (e.g., `list_replicas`). Look for the internal helper function or implementation method (e.g., `_list_replicas_internal`) where the logic actually resides.
-2.  **Conservative Selection**: Select ONLY the function(s) you are confident contain the bug. If unsure, select the most likely one.
+1.  **Analyze Code Snippets**: You are provided with code snippets retrieved from the vector database. **YOU MUST USE THESE SNIPPETS** to make your decision. Do not hallucinate code that is not present.
+2.  **Filter Irrelevant Candidates**: Many candidates may be irrelevant. If a candidate's code does not match the issue logic, **DISCARD IT**. Do not select it just because it was retrieved.
+3.  **Look Deeper**: Do not just pick the public entry point (e.g., `list_replicas`). Look for the internal helper function or implementation method (e.g., `_list_replicas_internal`) where the logic actually resides.
+4.  **Multi-Selection**: You MUST select EXACTLY 5 most likely functions (or fewer if less than 5 candidates are provided). We prioritize Recall. Rank them from most likely to least likely.
 
-Return a JSON object with a single key "selected_functions" containing a list of objects.
+Return a JSON object with a single key "selected_functions" containing a list of EXACTLY 5 objects (or fewer if less than 5 candidates provided).
 Each object must have:
 - "id": The candidate ID.
-- "reasoning": Brief explanation of why this is the root cause.
+- "reasoning": Brief explanation of why this is the root cause, referencing specific lines or logic from the provided snippet.
 
-Example: {{ "selected_functions": [ {{ "id": "func_1", "reasoning": "Logic error in loop condition" }} ] }}"""),
+Example: {{ "selected_functions": [ {{ "id": "func_1", "reasoning": "Snippet shows logic error in loop condition at line 5" }}, {{ "id": "func_2", "reasoning": "Snippet confirms it handles null input from func_1 incorrectly" }}, {{ "id": "func_3", "reasoning": "Related helper that processes the data" }}, {{ "id": "func_4", "reasoning": "Caller function that invokes func_1" }}, {{ "id": "func_5", "reasoning": "Utility function used in error path" }} ] }}"""),
                 ("human", """Issue: {title}
 Description: {body}
 
 Candidate Functions:
 {candidates_text}
 
-Select the buggy function(s):""")
+Select the top 5 buggy function(s):""")
             ])
             
             chain = prompt | self.llm
@@ -512,7 +553,7 @@ Select the buggy function(s):""")
             selected_items = result.get("selected_functions", [])
             
             selected_candidates = []
-            for item in selected_items:
+            for item in selected_items[:5]:  # Enforce top 5 limit
                 cand_id = item.get('id')
                 # Find original candidate
                 orig_cand = next((c for c in candidates if c.get('id') == cand_id), None)
@@ -522,8 +563,67 @@ Select the buggy function(s):""")
                     new_cand['llm_reasoning'] = item.get('reasoning')
                     selected_candidates.append(new_cand)
             
-            return selected_candidates
+            # Extract token usage
+            token_usage = {}
+            if hasattr(response, 'response_metadata'):
+                token_usage = response.response_metadata.get('token_usage', {})
+            
+            return selected_candidates, token_usage
 
         except Exception as e:
+            if "429" in str(e) or "quota" in str(e).lower() or "rate limit" in str(e).lower():
+                raise
             logger.error(f"Error selecting functions: {e}")
-            return candidates[:1] # Fallback
+            return candidates[:1], {} # Fallback
+
+    @retry_with_backoff
+    def generate_search_query(self, issue_title: str, issue_body: str) -> str:
+        """
+        Generate a concise search query from the issue description.
+        
+        Args:
+            issue_title: Issue title
+            issue_body: Issue body
+            
+        Returns:
+            Generated search query string
+        """
+        if not self.is_available():
+            return f"{issue_title} {issue_body}"[:512] # Fallback to raw text
+
+        try:
+            prompt = ChatPromptTemplate.from_messages([
+                ("system", """You are an expert developer assisting with bug localization.
+Your task is to generate a **concise, semantic search query** that will be used to retrieve relevant code functions from a vector database.
+
+**Instructions**:
+1.  Analyze the issue title and body to understand the core technical problem.
+2.  Identify key concepts, specific class/function names mentioned, and the type of logic involved.
+3.  Formulate a query that captures these elements.
+4.  **Do NOT** include generic terms like "bug", "issue", "fix", or "error". Focus on the *code* concepts.
+5.  **Do NOT** return JSON. Return ONLY the query string.
+
+Example Issue: "AttributeError: 'NoneType' object has no attribute 'get' in process_data"
+Example Query: process_data function AttributeError NoneType get method data processing logic"""),
+                ("human", """Issue: {title}
+Description: {body}
+
+Generate the search query:""")
+            ])
+            
+            chain = prompt | self.llm
+            response = chain.invoke({
+                "title": issue_title,
+                "body": issue_body
+            })
+            
+            query = response.content.strip()
+            # Remove quotes if present
+            if query.startswith('"') and query.endswith('"'):
+                query = query[1:-1]
+            
+            return query
+
+        except Exception as e:
+            logger.error(f"Error generating search query: {e}")
+            return f"{issue_title} {issue_body}"[:512] # Fallback

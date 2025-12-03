@@ -67,6 +67,53 @@ def get_repo_info(url):
         return match.group(1), match.group(2)
     return None, None
 
+import requests
+import time
+
+def get_github_token():
+    """Retrieves the GitHub token from the environment variable."""
+    return os.environ.get("GITHUB_TOKEN")
+
+def get_repo_details(owner, name):
+    """
+    Fetches repository details (size, file count) from GitHub API.
+    Returns a dictionary with 'size' (in KB) and 'file_count'.
+    """
+    token = get_github_token()
+    headers = {"Authorization": f"token {token}"} if token else {}
+    
+    # Get repo metadata for size
+    api_url = f"https://api.github.com/repos/{owner}/{name}"
+    try:
+        response = requests.get(api_url, headers=headers)
+        if response.status_code == 200:
+            data = response.json()
+            size_kb = data.get('size', 0)
+            default_branch = data.get('default_branch', 'main')
+            
+            # Get file count using Tree API (recursive)
+            # Note: Tree API has limits, but for small repos it should be fine.
+            tree_url = f"https://api.github.com/repos/{owner}/{name}/git/trees/{default_branch}?recursive=1"
+            tree_response = requests.get(tree_url, headers=headers)
+            file_count = 0
+            if tree_response.status_code == 200:
+                tree_data = tree_response.json()
+                # Count items of type 'blob' (files)
+                file_count = len([item for item in tree_data.get('tree', []) if item.get('type') == 'blob'])
+            else:
+                print(f"    Warning: Could not fetch tree for {owner}/{name}: {tree_response.status_code}")
+            
+            return {'size': size_kb, 'file_count': file_count}
+        elif response.status_code == 403:
+            print(f"    Rate limit exceeded or forbidden for {owner}/{name}")
+            return None
+        else:
+            print(f"    Could not fetch metadata for {owner}/{name}: {response.status_code}")
+            return None
+    except Exception as e:
+        print(f"    Error fetching details for {owner}/{name}: {e}")
+        return None
+
 def process_language(lang_code, num_repos=3, min_issues=10):
     print(f"Processing language: {lang_code}...")
     splits = ['test', 'train', 'validation']
@@ -105,18 +152,46 @@ def process_language(lang_code, num_repos=3, min_issues=10):
         repo_issues[repo_full_name].append(item)
     
     # Filter repos with enough issues
-    valid_repos = {k: v for k, v in repo_issues.items() if len(v) >= min_issues}
-    print(f"Found {len(valid_repos)} repositories with >= {min_issues} issues.")
+    valid_repos_list = [k for k, v in repo_issues.items() if len(v) >= min_issues]
+    print(f"Found {len(valid_repos_list)} repositories with >= {min_issues} issues.")
     
-    # Sort by number of issues (descending) and take top N
-    sorted_repos = sorted(valid_repos.items(), key=lambda x: len(x[1]), reverse=True)[:num_repos]
+    # Fetch details for valid repos to sort by size
+    repo_details_map = {}
+    print("Fetching repository details (size, file count)...")
+    
+    # Limit checking to avoid massive wait times if there are hundreds of repos
+    # But user asked for smallest, so we should try to check as many as reasonable.
+    # Let's check up to 50 candidates.
+    candidates = valid_repos_list[:50] 
+    if len(valid_repos_list) > 50:
+        print(f"Warning: Checking only first 50 repositories out of {len(valid_repos_list)} to avoid rate limits.")
+    
+    for repo_full_name in candidates:
+        owner, name = repo_full_name.split('/')
+        details = get_repo_details(owner, name)
+        if details:
+            repo_details_map[repo_full_name] = details
+            print(f"  {repo_full_name}: Size={details['size']}KB, Files={details['file_count']}")
+        time.sleep(0.5) # Slight delay to be nice to API
+        
+    # Sort by size (ascending)
+    # Filter out repos where we couldn't get details
+    sorted_repos_by_size = sorted(
+        [r for r in repo_details_map.keys()],
+        key=lambda r: repo_details_map[r]['size']
+    )
+    
+    # Take top N smallest
+    selected_repo_names = sorted_repos_by_size[:num_repos]
     
     extracted_data = []
     
-    for repo_name, issues in sorted_repos:
-        print(f"  Extracting from {repo_name} ({len(issues)} issues)...")
-        # Take up to 10 issues (or all if close to 10)
-        # The requirement says "having 10 issues atleast", so we can take 10.
+    for repo_name in selected_repo_names:
+        issues = repo_issues[repo_name]
+        details = repo_details_map[repo_name]
+        print(f"  Extracting from {repo_name} (Size: {details['size']}KB, Files: {details['file_count']})...")
+        
+        # Take up to 10 issues
         selected_issues = issues[:10] 
         
         for issue in selected_issues:
@@ -128,6 +203,8 @@ def process_language(lang_code, num_repos=3, min_issues=10):
                 'Language': lang_code,
                 'Repository': repo_name,
                 'Repo Link': f"https://github.com/{repo_name}",
+                'Repo Size (KB)': details['size'],
+                'Total Files': details['file_count'],
                 'Issue Title': issue.get('issue_title'),
                 'Issue Description': issue.get('issue_body'),
                 'Issue URL': issue.get('html_url') or issue.get('issue_url'),

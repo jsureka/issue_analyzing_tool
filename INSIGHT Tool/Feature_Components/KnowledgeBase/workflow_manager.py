@@ -38,16 +38,8 @@ class WorkflowManager:
     
     def __init__(self):
         self.llm_service = LLMService()
-        self.retriever = DenseRetriever()
-        self.graph_store = GraphStore()
-        # IssueProcessor needs an embedder, which is lazy loaded in knowledgeBase.py
-        # We'll initialize it when needed or pass it in. 
-        # For now, we'll assume the global one is used or we create a fresh one.
-        # To avoid circular imports or complex init, we'll rely on the retriever's embedder if possible
-        # or just create a new one.
-        from .embedder import CodeEmbedder
-        self.embedder = CodeEmbedder()
-        self.issue_processor = IssueProcessor(self.embedder)
+        from .bug_localization import BugLocalization
+        self.bug_localization = None  # Lazy init per repo
         
         self.workflow = self._build_graph()
         
@@ -57,15 +49,13 @@ class WorkflowManager:
         
         # Define nodes
         workflow.add_node("process_issue", self.process_issue)
-        workflow.add_node("retrieve_context", self.retrieve_context)
-        workflow.add_node("analyze_bug", self.analyze_bug)
+        workflow.add_node("localize_bug", self.localize_bug)
         workflow.add_node("generate_patch", self.generate_patch)
         
         # Define edges
         workflow.set_entry_point("process_issue")
-        workflow.add_edge("process_issue", "retrieve_context")
-        workflow.add_edge("retrieve_context", "analyze_bug")
-        workflow.add_edge("analyze_bug", "generate_patch")
+        workflow.add_edge("process_issue", "localize_bug")
+        workflow.add_edge("localize_bug", "generate_patch")
         workflow.add_edge("generate_patch", END)
         
         return workflow.compile()
@@ -74,85 +64,31 @@ class WorkflowManager:
         """Node: Process the issue text"""
         logger.info("Workflow Step: Processing Issue")
         
-        # Ensure embedder is loaded
-        if not self.embedder.model:
-            self.embedder.load_model()
+        # Initialize BugLocalization if needed
+        if not self.bug_localization or self.bug_localization.repo_name != state["repo_name"]:
+            from .bug_localization import BugLocalization
+            self.bug_localization = BugLocalization(state["repo_name"], state["repo_path"])
             
-        processed = self.issue_processor.process_issue(
+        return {"processed_issue": {}}
+
+    def localize_bug(self, state: GraphState) -> Dict[str, Any]:
+        """Node: Localize bug using RAG pipeline"""
+        logger.info("Workflow Step: Localizing Bug (RAG Pipeline)")
+        
+        selected_functions, _, _ = self.bug_localization.localize(
             state["issue_title"], 
             state["issue_body"]
         )
         
-        return {"processed_issue": processed}
-
-    def retrieve_context(self, state: GraphState) -> Dict[str, Any]:
-        """Node: Retrieve vector and graph context"""
-        logger.info("Workflow Step: Retrieving Context")
-        
-        repo_name = state["repo_name"]
-        processed_issue = state["processed_issue"]
-        
-        # 1. Vector Search (FAISS)
-        self.retriever.load_index(repo_name)
-        results = self.retriever.retrieve(processed_issue.embedding, k=5)
-        
-        candidate_functions = []
-        function_ids = []
-        
-        for res in results:
-            candidate_functions.append({
-                "id": res.function_id,
-                "name": res.function_name,
-                "file_path": res.file_path,
-                "snippet": getattr(res, "snippet", ""),
-                "score": res.similarity_score,
-                "language": getattr(res, "language", "python"),
-                "line_range": [res.start_line, res.end_line]
-            })
-            function_ids.append(res.function_id)
+        # Format analysis from the reasoning of selected functions
+        analysis = "Bug Localization Analysis:\n"
+        for func in selected_functions:
+            analysis += f"- Function {func['name']} in {func['file_path']}: {func.get('llm_reasoning', 'No reasoning provided')}\n"
             
-        # 2. Graph Context (Neo4j)
-        self.graph_store.connect()
-        graph_context = self.graph_store.get_context_subgraph(function_ids)
-        
-        # 3. Directory Context (GraphRAG)
-        # Get summaries for directories containing top files
-        top_dirs = set()
-        for func in candidate_functions:
-            from pathlib import Path
-            p = Path(func["file_path"]).parent
-            top_dirs.add(str(p).replace('\\', '/'))
-            
-        all_summaries = self.graph_store.get_directory_summaries(repo_name)
-        relevant_summaries = [s for s in all_summaries if s['path'] in top_dirs]
-        
         return {
-            "candidate_functions": candidate_functions,
-            "graph_context": graph_context,
-            "directory_context": relevant_summaries
-        }
-
-    def analyze_bug(self, state: GraphState) -> Dict[str, Any]:
-        """Node: Analyze bug using LLM"""
-        logger.info("Workflow Step: Analyzing Bug")
-        
-        # Combine directory summaries into graph context
-        dir_context_str = "\nDirectory Summaries:\n"
-        for s in state["directory_context"]:
-            dir_context_str += f"- {s['path']}: {s['summary']}\n"
-            
-        full_graph_context = state["graph_context"] + "\n" + dir_context_str
-        
-        analysis_result = self.llm_service.analyze_issue(
-            state["issue_title"],
-            state["issue_body"],
-            state["candidate_functions"],
-            full_graph_context
-        )
-        
-        return {
-            "analysis": analysis_result.get("analysis", ""),
-            "hypothesis": analysis_result.get("hypothesis", "")
+            "candidate_functions": selected_functions,
+            "analysis": analysis,
+            "hypothesis": analysis # Use analysis as hypothesis
         }
 
     def generate_patch(self, state: GraphState) -> Dict[str, Any]:
@@ -167,7 +103,7 @@ class WorkflowManager:
         if state["candidate_functions"]:
             top_func = state["candidate_functions"][0]
             target_file = top_func["file_path"]
-            target_code = top_func["snippet"]
+            target_code = top_func.get("code", "")
             
         patch = self.llm_service.generate_patch(
             state["issue_title"],
@@ -181,9 +117,9 @@ class WorkflowManager:
         final_result = {
             "top_files": [{
                 "file_path": f["file_path"],
-                "score": f["score"],
+                "score": f.get("score", 0.0),
                 "functions": [f],
-                "language": f["language"]
+                "language": "python" # Assumption
             } for f in state["candidate_functions"]],
             "llm_analysis": state["analysis"],
             "llm_hypothesis": state["hypothesis"],

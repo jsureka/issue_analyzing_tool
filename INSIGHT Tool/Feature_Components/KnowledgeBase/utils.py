@@ -141,3 +141,54 @@ def format_file_size(size_bytes: int) -> str:
             return f"{size_bytes:.1f} {unit}"
         size_bytes /= 1024.0
     return f"{size_bytes:.1f} TB"
+
+
+import math
+from collections import Counter
+
+class BM25:
+    def __init__(self, corpus):
+        self.corpus_size = len(corpus)
+        self.avgdl = 0
+        self.doc_freqs = []
+        self.idf = {}
+        self.doc_len = []
+        self.corpus = corpus
+        self._initialize()
+
+    def _initialize(self):
+        df = {}
+        total_length = 0
+        for document in self.corpus:
+            tokens = self._tokenize(document)
+            self.doc_len.append(len(tokens))
+            total_length += len(tokens)
+            for token in set(tokens):
+                df[token] = df.get(token, 0) + 1
+        
+        self.avgdl = total_length / self.corpus_size
+        for token, freq in df.items():
+            self.idf[token] = math.log(1 + (self.corpus_size - freq + 0.5) / (freq + 0.5))
+
+    def _tokenize(self, text):
+        import re
+        return [t.lower() for t in re.split(r'[^a-zA-Z0-9]', text) if t]
+
+    def get_scores(self, query):
+        query_tokens = self._tokenize(query)
+        scores = [0] * self.corpus_size
+        for i, doc in enumerate(self.corpus):
+            doc_tokens = self._tokenize(doc)
+            doc_len = self.doc_len[i]
+            frequencies = Counter(doc_tokens)
+            
+            score = 0
+            for token in query_tokens:
+                if token not in frequencies:
+                    continue
+                freq = frequencies[token]
+                numerator = self.idf.get(token, 0) * freq * (2.5)
+                denominator = freq + 1.5 * (1 - 0.75 + 0.75 * doc_len / self.avgdl)
+                score += numerator / denominator
+            scores[i] = score
+        return scores

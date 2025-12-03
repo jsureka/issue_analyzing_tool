@@ -293,8 +293,10 @@ class CommentGenerator:
                 permalink = self._generate_github_permalink(file_path, line_range[0], line_range[1], branch)
                 
                 # Compact format
-                comment1 += f"{rank}. **`{func_name}`** in `{file_path}`\n"
-                comment1 += f"   [Lines {line_range[0]}-{line_range[1]}]({permalink})\n\n"
+                if permalink:
+                    comment1 += f"{rank}. **[`{func_name}`]({permalink})** in `{file_path}`\n\n"
+                else:
+                    comment1 += f"{rank}. **`{func_name}`** in `{file_path}`\n\n"
                 rank += 1
             
             comments.append(comment1)

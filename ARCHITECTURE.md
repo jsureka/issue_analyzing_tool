@@ -1,186 +1,155 @@
-# INSIGHT Multi-Language Knowledge Base - Architecture
+# INSIGHT - Automated Bug Localization
 
 ## System Overview
 
-INSIGHT (Issue Analyzing Tool) is a GitHub application that provides automated bug localization and technical analysis for software repositories. It leverages an **Agentic RAG (Retrieval-Augmented Generation)** architecture, combining graph-based retrieval (GraphRAG) with Large Language Models (LLMs) to understand code context and suggest fixes.
+INSIGHT (Issue Analyzing Tool) is a GitHub application that provides automated bug localization and technical analysis using a **RAG (Retrieval-Augmented Generation)** pipeline. It combines semantic search with LLM-powered analysis to identify buggy code and suggest fixes.
 
 **Key Features:**
+- **RAG-based Localization**: Dense vector retrieval + LLM re-ranking
+- **Smart Query Generation**: LLM generates optimized search queries
+- **Graph Enrichment**: Adds caller/callee context from code knowledge graph
+- **Multi-Language Support**: Python, Java, Kotlin
+- **GitHub Integration**: Automated knowledge base updates on code changes
 
-- **Agentic Workflow**: Uses LangGraph to orchestrate a multi-step reasoning process (Retrieve -> Analyze -> Hypothesize -> Patch).
-- **GraphRAG**: Combines vector similarity search with knowledge graph traversals and directory summarization for rich context.
-- **LLM Integration**: Powered by Google Gemini 2.0 Flash for deep code analysis and patch generation.
-- **Multi-Language Support**: Python and Java with extensible architecture.
-- **Automatic Knowledge Base Updates**: Automatically updates code indices when developers push changes.
-- **Production-Ready**: Comprehensive error handling, metrics tracking, and monitoring.
-
-## High-Level Architecture
+## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│                         GitHub Webhooks                              │
-│         ┌──────────────────────┬──────────────────────┐             │
-│         │  Issue Events        │   Push Events        │             │
-│         │  (opened, edited)    │   (code changes)     │             │
-│         └─────────┬────────────┴──────────┬───────────┘             │
-│                   │                       │                         │
-│                   ▼                       ▼                         │
-┌─────────────────────┐  ┌─────────────────────────────────────┐      │
-│  Issue Event        │  │  Push Event Handler                 │      │
-│  Handler            │  │  • Repository Sync                  │      │
-│                     │  │  • Change Detection                 │      │
-│  ┌──────────────┐  │  │  • Incremental Update               │      │
-│  │  Duplicate   │  │  │  • Metrics Tracking                 │      │
-│  │  Detection   │  │  └─────────────────────────────────────┘      │
-│  └──────────────┘  │           │                                    │
-│           │        │           ▼                                    │
-│           │        │  ┌─────────────────────────────────────┐      │
-│           │        │  │  Update Strategy Decision           │      │
-│           │        │  │  ├─ Initial: Full index             │      │
-│           │        │  │  ├─ Incremental: Changed files      │      │
-│           │        │  │  └─ Full: Complete reindex          │      │
-│           │        │  └─────────────────────────────────────┘      │
-│           │        │           │                                    │
-│           ▼        └───────────┼────────────────────────────────────┘
-│                                ▼
-│  ┌────────────────────────────────────────────────────────────┐
-│  │              Knowledge Base System (Multi-Language)         │
-│  │                                                            │
-│  │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐    │
-│  │  │  Vector DB   │  │  Graph DB    │  │  LLM Service │    │
-│  │  │   (FAISS)    │  │   (Neo4j)    │  │   (Gemini)   │    │
-│  │  └──────────────┘  └──────────────┘  └──────────────┘    │
-│  └────────────────────────────────────────────────────────────┘
-│                                │
-│                                ▼
-│  ┌────────────────────────────────────────────────────────────┐
-│  │                 Agentic RAG Workflow (LangGraph)            │
-│  │                                                            │
-│  │  Start ──> [Process Issue] ──> [Retrieve Context]          │
-│  │                                       │                    │
-│  │                                       ▼                    │
-│  │        [Generate Patch] <── [Analyze Bug & Hypothesize]    │
-│  │               │                                            │
-│  │               ▼                                            │
-│  │        [Format Result] ──> [Post GitHub Comment]           │
-│  └────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────┐
+│                    GitHub Webhooks                        │
+│         ┌──────────────┬──────────────┐                   │
+│         │Issue Events  │Push Events   │                   │
+│         └──────┬───────┴───────┬──────┘                   │
+│                │               │                          │
+│                ▼               ▼                          │
+│       ┌────────────┐  ┌────────────────┐                 │
+│       │Issue       │  │Repository      │                 │
+│       │Handler     │  │Indexer         │                 │
+│       └──────┬─────┘  └────────┬───────┘                 │
+│              │                 │                          │
+│              │                 ▼                          │
+│              │        ┌────────────────┐                  │
+│              │        │Knowledge Base  │                  │
+│              │        │• FAISS (Vectors)│                  │
+│              │        │• Neo4j (Graph)  │                  │
+│              │        └────────┬───────┘                  │
+│              │                 │                          │
+│              ▼                 │                          │
+│       ┌───────────────────────▼──────┐                   │
+│       │    Bug Localization Pipeline  │                  │
+│       │    (BugLocalization class)    │                  │
+│       │                               │                  │
+│       │  1. Generate Search Query     │                  │
+│       │     (LLM)                     │                  │
+│       │  2. Dense Retrieval           │                  │
+│       │     (FAISS, k=20)             │                  │
+│       │  3. Graph Enrichment          │                  │
+│       │     (Neo4j: callers/callees)  │                  │
+│       │  4. LLM Selection             │                  │
+│       │     (Top 5 functions)         │                  │
+│       │  5. Generate Analysis &Patch  │                  │
+│       │     (LLM)                     │                  │
+│       └───────────────────────────────┘                  │
+│                       │                                   │
+│                       ▼                                   │
+│              GitHub Comment Posted                        │
+└──────────────────────────────────────────────────────────┘
 ```
 
-## Component Architecture
+## Core Components
 
-### 1. Knowledge Base Layer
+### 1. Bug Localization Pipeline (`bug_localization.py`)
+The main RAG pipeline that orchestrates bug localization:
 
-The Knowledge Base is the foundation of the system, storing code structure and semantics.
+1. **Query Generation**: LLM generates semantic search query from issue
+2. **Dense Retrieval**: Retrieves top-20 candidate functions using UnixCoder embeddings
+3. **Graph Enrichment**: Adds callers/callees context from Neo4j
+4. **LLM Selection**: GPT-4o/Gemini selects top-5 most likely buggy functions
+5. **Return**: Returns ranked list (top-3 used for evaluation)
 
-- **Vector Store (FAISS)**: Stores embeddings of functions and code snippets for semantic similarity search.
-- **Graph Store (Neo4j)**: Stores the structural relationships of the code (Files, Classes, Functions, Calls, Imports, Directories).
-- **Directory Summaries**: Stores high-level summaries of directory contents to provide architectural context to the LLM.
+### 2. Knowledge Base Components
 
-### 2. Agentic Workflow (LangGraph)
+#### Vector Store (`retriever.py` + FAISS)
+- Stores embeddings of all functions in the repository
+- Uses Microsoft's UnixCoder model
+- Enables semantic similarity search
 
-The bug localization process is modeled as a state graph:
+#### Graph Store (`graph_store.py` + Neo4j)
+- Stores code structure: Files, Classes, Functions, Calls
+- Provides caller/callee relationships
+- Enables graph-based context enrichment
 
-1.  **Process Issue**: Cleans and embeds the issue title and body.
-2.  **Retrieve Context**:
-    *   **Vector Search**: Finds top-k similar functions using FAISS.
-    *   **Graph Traversal**: Retrieves call graphs and dependencies for the candidate functions from Neo4j.
-    *   **Directory Context**: Fetches summaries of the directories containing the candidate files.
-3.  **Analyze Bug**:
-    *   Uses Gemini to analyze the issue against the retrieved code context.
-    *   Generates a technical analysis and a hypothesis for the bug's location and cause.
-4.  **Generate Patch**:
-    *   Uses Gemini to suggest a code fix (patch) based on the hypothesis and the specific target file.
+#### Repository Indexer (`indexer.py`)
+- Parses Python/Java/Kotlin code using tree-sitter
+- Extracts functions and their relationships
+- Generates embeddings and stores in FAISS
+- Builds knowledge graph in Neo4j
 
-### 3. Data Flow Architecture
+### 3. LLM Service (`llm_service.py`)
+Provides LLM capabilities:
+- **Query Generation**: Creates optimized search queries
+- **Function Selection**: Identifies root cause functions
+- **Analysis**: Explains the bug
+- **Patch Generation**: Suggests fixes
 
+Supports: GPT-4o, Gemini 2.0 Flash
+
+### 4. Workflow Manager (`workflow_manager.py`)
+LangGraph-based orchestration (optional):
+- Manages multi-step bug localization workflow
+- Uses `BugLocalization` internally
+- Adds patch generation step
+
+## Data Flow
+
+### Indexing Phase
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                    INDEXING PHASE                            │
-└─────────────────────────────────────────────────────────────┘
+Repository → Parse (tree-sitter) → Extract Functions →
+  ├─ Generate Embeddings (UnixCoder) → FAISS
+  └─ Build Graph (relationships) → Neo4j
+```
 
-Repository Files
-      │
-      ▼
-┌─────────────────┐
-│ Code Parsing    │  → Extract AST (tree-sitter)
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│ Graph Build     │  → Create Nodes & Edges in Neo4j
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│ Embedding Gen   │  → Generate Code Embeddings (UniXcoder)
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│ Summarization   │  → Generate Directory Summaries (LLM)
-└────────┬────────┘
-         │
-         ▼
-    [Storage]
- (FAISS + Neo4j)
-
-┌─────────────────────────────────────────────────────────────┐
-│                   RETRIEVAL & ANALYSIS PHASE                 │
-└─────────────────────────────────────────────────────────────┘
-
-GitHub Issue
-      │
-      ▼
-┌─────────────────┐
-│ Workflow Start  │
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│ Context Retr.   │  → Vector Search + Graph Traversal
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│ LLM Analysis    │  → "Explain why this is a bug..."
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│ Patch Gen       │  → "Suggest a fix..."
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│ Comment Gen     │  → Format Analysis, Hypothesis, Patch
-└────────┬────────┘
-         │
-         ▼
-GitHub Comment Posted
+### Localization Phase
+```
+GitHub Issue →
+  1. Generate Search Query (LLM) →
+  2. Embed Query (UnixCoder) →
+  3. Retrieve Candidates (FAISS, k=20) →
+  4. Enrich with Graph Context (Neo4j) →
+  5. LLM Selection (Top 5) →
+  6. Analysis & Patch (LLM) →
+GitHub Comment
 ```
 
 ## Technology Stack
 
-| Component | Technology | Version | Purpose |
-| :--- | :--- | :--- | :--- |
-| **Language** | Python | 3.11+ | Core implementation |
-| **Orchestration** | LangGraph | 0.2+ | Agentic workflow management |
-| **LLM** | Google Gemini | 2.0 Flash | Reasoning and generation |
-| **Vector Search** | FAISS | 1.8+ | Similarity search |
-| **Graph DB** | Neo4j | 5.0+ | Knowledge graph |
-| **Embeddings** | UniXcoder | - | Code embeddings |
-| **Parsing** | tree-sitter | 0.21+ | AST parsing |
-| **Web Framework** | Flask | 3.0+ | Webhook handling |
+| Component | Technology | Purpose |
+|:---|:---|:---|
+| **Language** | Python 3.11+ | Core implementation |
+| **LLM** | GPT-4o / Gemini 2.0 | Reasoning and generation |
+| **Embeddings** | UnixCoder | Code embeddings |
+| **Vector Search** | FAISS | Similarity search |
+| **Graph DB** | Neo4j | Knowledge graph |
+| **Parsing** | tree-sitter | AST extraction |
+| **Orchestration** | LangGraph (optional) | Workflow management |
+| **Web Framework** | Flask | Webhook handling |
 
-## Deployment Architecture
+## Evaluation Results
 
-The application is containerized and designed to run in a cloud environment (e.g., AWS, Azure) or locally with ngrok for testing.
+On the [LCA Bug Localization benchmark](https://huggingface.co/datasets/JetBrains-Research/lca-bug-localization):
 
-- **Flask App**: Handles GitHub webhooks.
-- **Worker Process**: Executes the LangGraph workflow (can be async).
-- **Neo4j Instance**: Stores the knowledge graph.
-- **Local/S3 Storage**: Stores FAISS indices and metadata.
+**File-Level Metrics (k=3)**:
+- Hit@3: **76.67%**
+- Precision@3: **35.56%**
+- Recall@3: **50.06%**
+- F1@3: **38.47%**
 
-## Monitoring
+**Function-Level Metrics (k=3)**:
+- Hit@3: **13.33%**
+- F1@3: **5.24%**
 
-- **Telemetry**: Tracks indexing time, retrieval latency, and LLM token usage.
-- **Logging**: Structured logs for debugging and auditing.
+## Storage
+
+- **SQLite**: Repository metadata, indexing status
+- **FAISS**: Function embeddings (one index per repository)
+- **Neo4j**: Code knowledge graph (shared across repositories)
+- **Local Files**: Cloned repositories (temporary)

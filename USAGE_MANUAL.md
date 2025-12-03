@@ -180,22 +180,13 @@ if 'top_files' in results:
 ```
 Bug Localization Results
 ========================
-Confidence: high (92%)
 
 LLM Analysis:
 The issue appears to be in the user validation logic. The `validate_user` function checks for existing users but fails to handle the case where the database connection is null...
 
 Top 5 Candidate Functions:
-
-1. validate_user in auth/validator.py
-   Language: python
-   Score: 0.945
-   Lines: 45-78
-
-2. login in auth/authentication.py
-   Language: python
-   Score: 0.887
-   Lines: 120-145
+1. **[`validate_user`](...)** in `auth/validator.py`
+2. **[`login`](...)** in `auth/authentication.py`
 ```
 
 ---
@@ -358,8 +349,7 @@ results = BugLocalization(
 # Returns:
 {
     'repository': 'owner/repo',
-    'confidence_level': 'high',
-    'confidence_score': 0.92,
+    'repository': 'owner/repo',
     'llm_analysis': '...',
     'llm_hypothesis': '...',
     'llm_patch': '...',
