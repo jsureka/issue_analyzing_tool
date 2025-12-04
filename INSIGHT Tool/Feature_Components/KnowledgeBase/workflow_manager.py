@@ -81,7 +81,7 @@ class WorkflowManager:
         )
         
         # Format concise analysis from top 3 functions only
-        analysis = "**Bug Localization:**\n\n"
+        analysis = ""
         top_funcs = [f for f in selected_functions[:3] if f.get('llm_reasoning')]
         
         if top_funcs:
@@ -96,7 +96,7 @@ class WorkflowManager:
         return {
             "candidate_functions": selected_functions,
             "analysis": analysis,
-            "hypothesis": analysis
+            "hypothesis": ""  # Removed duplication
         }
 
     def generate_patch(self, state: GraphState) -> Dict[str, Any]:

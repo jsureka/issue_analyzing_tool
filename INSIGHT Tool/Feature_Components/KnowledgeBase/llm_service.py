@@ -130,7 +130,10 @@ Original Code:
 {code}
 ```
 
-Generate the solution plan:""")
+Generate a concise solution plan.
+1. Provide high-level pseudocode or step-by-step directions.
+2. DO NOT generate actual code blocks.
+3. Keep it short and actionable.""")
             ])
             
             chain = prompt | self.llm
