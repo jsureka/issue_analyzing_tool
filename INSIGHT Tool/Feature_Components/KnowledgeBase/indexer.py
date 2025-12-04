@@ -389,7 +389,6 @@ class RepositoryIndexer:
         """
         index_path = self.index_dir / repo_name.replace('/', '_') / "index.faiss"
         metadata_path = self.index_dir / repo_name.replace('/', '_') / "metadata.json"
-        window_index_path = self.index_dir / repo_name.replace('/', '_') / "windows.index"
         
         if not index_path.exists() or not metadata_path.exists():
             return None

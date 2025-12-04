@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Optional, List, Dict, Type
 
 from .language_parser import LanguageParser
-from .parser import PythonParser
+from .python_parser import PythonParser
 from .java_parser import JavaParser
 
 logger = logging.getLogger(__name__)

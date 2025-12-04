@@ -4,27 +4,11 @@ import os
 import subprocess
 import tempfile
 from config import Config as config
-from Issue_Indexer.getAllIssues import fetch_repository_issues
 from .getCodeFiles import fetch_all_code_files
 from .createCommentBugLocalization import CreateCommentBL, BLStartingCommentForWaiting, CreateErrorComment
 from .app_authentication import authenticate_github_app
 from Feature_Components.knowledgeBase import BugLocalization as KBBugLocalization, GetIndexStatus
-# from Data_Storage.dbOperations import create_table_if_not_exists, is_table_exists, insert_issue_to_db, delete_issue_from_db
 from Feature_Components.KnowledgeBase.telemetry import get_telemetry_logger
-
-# Stub functions for database operations (Data_Storage not available)
-def create_table_if_not_exists(repo_name):
-    pass
-
-def is_table_exists(repo_name):
-    return False
-
-def insert_issue_to_db(repo_name, issue_id, title, body, created_at, url, labels):
-    pass
-
-def delete_issue_from_db(repo_name, issue_id):
-    pass
-
 
 logger = logging.getLogger(__name__)
 
@@ -33,26 +17,6 @@ def process_issue_event(repo_full_name, input_issue, action):
     
     try:    
         if action == 'opened':
-            # Ensure table exists and fetch historical issues for installation
-            if not is_table_exists(repo_full_name):
-                logger.info(f"Table for {repo_full_name} does not exist. Creating the table and fetching issues.")
-                create_table_if_not_exists(repo_full_name)
-
-                issues_data = fetch_repository_issues(repo_full_name)
-                for issue in issues_data:
-                    if issue['number'] == input_issue['issue_number']:
-                        logger.info(f"Skipping issue {issue['number']} as it matches the input issue.")
-                        continue  
-
-                    issue_id = issue['number']
-                    issue_title = issue['title'] or ""
-                    issue_body = issue['body'] or ""
-                    created_at = issue['created_at']  
-                    issue_url = issue['html_url']  
-                    issue_labels = [label['name'] for label in issue.get('labels', [])]
-
-                    insert_issue_to_db(repo_full_name, issue_id, issue_title, issue_body, created_at, issue_url, issue_labels)
-
             # Fetch code files from repository
             code_files = fetch_all_code_files(repo_full_name, input_issue['issue_branch'])
             paths_only = [file['path'] for file in code_files]
@@ -60,20 +24,6 @@ def process_issue_event(repo_full_name, input_issue, action):
             # Prepare issue data
             input_issue_title = input_issue['issue_title'] or ""
             input_issue_body = input_issue['issue_body'] or ""
-
-            # Insert current issue to database
-            try:
-                insert_issue_to_db(
-                    repo_full_name,
-                    input_issue['issue_number'],
-                    input_issue['issue_title'],
-                    input_issue['issue_body'],
-                    input_issue['created_at'],
-                    input_issue['issue_url'],
-                    input_issue['issue_labels']
-                )
-            except Exception as e:
-                logger.error(f"An error occurred while inserting the issue: {e}")
 
             # Get authentication token
             auth_token = authenticate_github_app(repo_full_name)
@@ -221,8 +171,7 @@ def process_issue_event(repo_full_name, input_issue, action):
                 )
         
         elif action == 'deleted':
-            delete_issue_from_db(repo_full_name, input_issue['issue_number'])
-            logger.info(f"Deleted issue {input_issue['issue_number']} from the database.")
+            logger.info(f"Issue {input_issue['issue_number']} deleted (no action required since issues are not stored).")
     except Exception as e:
         logger.error(f"An error occurred in process_issue_event: {e}", exc_info=True)
 

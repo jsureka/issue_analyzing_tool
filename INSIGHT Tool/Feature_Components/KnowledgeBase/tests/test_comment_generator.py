@@ -53,32 +53,7 @@ class TestCommentGenerator(unittest.TestCase):
             ]
         }
     
-    def test_confidence_badge_high(self):
-        """Test high confidence badge generation"""
-        badge = self.generator.format_confidence_badge("high", 0.92)
-        
-        self.assertIn("High", badge)
-        self.assertIn("92%", badge)
-        self.assertIn("🟢", badge)
-        self.assertIn("Very likely", badge)
-    
-    def test_confidence_badge_medium(self):
-        """Test medium confidence badge generation"""
-        badge = self.generator.format_confidence_badge("medium", 0.65)
-        
-        self.assertIn("Medium", badge)
-        self.assertIn("65%", badge)
-        self.assertIn("🟡", badge)
-        self.assertIn("Possibly", badge)
-    
-    def test_confidence_badge_low(self):
-        """Test low confidence badge generation"""
-        badge = self.generator.format_confidence_badge("low", 0.35)
-        
-        self.assertIn("Low", badge)
-        self.assertIn("35%", badge)
-        self.assertIn("🔴", badge)
-        self.assertIn("further investigation", badge)
+
     
     def test_github_permalink_generation(self):
         """Test GitHub permalink URL generation"""

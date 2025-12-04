@@ -26,6 +26,10 @@ tree-sitter-java==0.21.0
 faiss-cpu==1.8.0
 numpy==1.24.4
 
+# Embedding Models
+torch==2.5.1
+transformers==4.46.3
+
 # Graph Database (for Knowledge Base)
 neo4j==5.25.0
 pytz==2024.2

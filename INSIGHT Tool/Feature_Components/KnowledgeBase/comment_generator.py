@@ -24,54 +24,7 @@ class CommentGenerator:
         self.repo_name = repo_name
         logger.info(f"CommentGenerator initialized for {repo_owner}/{repo_name}")
     
-    def _get_confidence_badge(self, confidence: str, score: float) -> str:
-        """
-        Get confidence badge with emoji indicator and calibrated probability
-        
-        Args:
-            confidence: Confidence level ("high", "medium", "low")
-            score: Calibrated probability score (0-1)
-            
-        Returns:
-            Formatted confidence badge string with emoji and percentage
-        """
-        confidence_lower = confidence.lower()
-        
-        # Map confidence to emoji and label
-        if confidence_lower == "high":
-            emoji = "🟢"
-            label = "High"
-            description = "Very likely to contain the bug"
-        elif confidence_lower == "medium":
-            emoji = "🟡"
-            label = "Medium"
-            description = "Possibly related to the bug"
-        else:
-            emoji = "🔴"
-            label = "Low"
-            description = "May require further investigation"
-        
-        # Convert score to percentage
-        percentage = int(score * 100)
-        
-        # Format badge with emoji, percentage, and description
-        badge = f"**Confidence:** {label} ({percentage}% probability) {emoji}\n\n"
-        badge += f"*{description}*"
-        
-        return badge
-    
-    def format_confidence_badge(self, confidence: str, score: float) -> str:
-        """
-        Public method to format confidence badge
-        
-        Args:
-            confidence: Confidence level ("high", "medium", "low")
-            score: Calibrated probability score (0-1)
-            
-        Returns:
-            Formatted confidence badge string
-        """
-        return self._get_confidence_badge(confidence, score)
+
     
     def _generate_github_permalink(self, file_path: str, start_line: int, 
                                    end_line: int, ref: str) -> str:
@@ -243,15 +196,15 @@ class CommentGenerator:
         return section
     
     def generate_comment(self, results: Dict[str, Any], confidence: str = "medium", 
-                        confidence_score: float = 0.5) -> List[str]:
+                    confidence_score: float = 0.5) -> List[str]:
         """
         Generate complete GitHub comments from retrieval results
-        
+
         Args:
             results: Formatted results dictionary from ResultFormatter
             confidence: Overall confidence level (unused)
-            confidence_score: Calibrated probability score (unused)
-            
+               confidence_score: Calibrated probability score (unused)
+        
         Returns:
             List of Markdown-formatted GitHub comments
         """
@@ -280,8 +233,17 @@ class CommentGenerator:
                     func['language'] = file_language
                     all_functions.append(func)
             
-            # Sort by score descending
-            all_functions.sort(key=lambda x: x.get('score', 0), reverse=True)
+            # **FIX: Prioritize LLM-selected functions, then sort by score**
+            # Separate LLM-selected (with reasoning) from vector-only
+            llm_selected = [f for f in all_functions if f.get('llm_reasoning')]
+            vector_only = [f for f in all_functions if not f.get('llm_reasoning')]
+            
+            # LLM-selected are already in ranked order from select_functions
+            # Sort vector-only by score as fallback
+            vector_only.sort(key=lambda x: x.get('score', 0), reverse=True)
+            
+            # Combine: LLM-selected first (in their order), then vector-only
+            all_functions = llm_selected + vector_only
             
             # Take top 3
             rank = 1
@@ -308,9 +270,9 @@ class CommentGenerator:
             if llm_analysis or llm_hypothesis:
                 comment2 = "## 🧠 Technical Analysis\n\n"
                 if llm_analysis:
-                     comment2 += f"{llm_analysis}\n\n"
+                        comment2 += f"{llm_analysis}\n\n"
                 if llm_hypothesis:
-                     comment2 += f"**Hypothesis:**\n{llm_hypothesis}\n"
+                        comment2 += f"**Hypothesis:**\n{llm_hypothesis}\n"
                 comments.append(comment2)
             
             # --- Comment 3: Suggested Patch ---

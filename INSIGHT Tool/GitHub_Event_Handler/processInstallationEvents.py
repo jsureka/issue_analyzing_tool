@@ -1,22 +1,7 @@
 import logging
-from Issue_Indexer.getAllIssues import fetch_repository_issues
-# from Data_Storage.dbOperations import insert_issue_to_db, create_table_if_not_exists, delete_table
 from concurrent.futures import ThreadPoolExecutor
 
 logger = logging.getLogger(__name__)
-
-# Stub functions for database operations (Data_Storage not available)
-def create_table_if_not_exists(repo_name):
-    logger.debug(f"Stub: create_table_if_not_exists called for {repo_name}")
-    pass
-
-def insert_issue_to_db(repo_name, issue_id, title, body, created_at, url, labels):
-    logger.debug(f"Stub: insert_issue_to_db called for {repo_name} issue #{issue_id}")
-    pass
-
-def delete_table(repo_name):
-    logger.debug(f"Stub: delete_table called for {repo_name}")
-    pass
 
 def process_installation_event(repo_full_name, repo_default_branch, action):
     """
@@ -26,22 +11,6 @@ def process_installation_event(repo_full_name, repo_default_branch, action):
         logger.info(f"Processing installation '{action}' for {repo_full_name}")
         
         if action in ['created', 'added']:
-            create_table_if_not_exists(repo_full_name)
-            issues_data = fetch_repository_issues(repo_full_name)
-            
-            for issue in issues_data:
-                issue_id = issue['number']
-                issue_title = issue['title'] or ""
-                issue_body = issue['body'] or ""
-                created_at = issue['created_at']
-                issue_url = issue['html_url']  
-                issue_labels = [label['name'] for label in issue.get('labels', [])]
-
-                try:
-                    insert_issue_to_db(repo_full_name, issue_id, issue_title, issue_body, created_at, issue_url, issue_labels)
-                except Exception as e:
-                    logger.warning(f"Failed to insert issue {issue_id} (likely duplicate): {e}")
-            
             # Trigger Knowledge Base indexing
             logger.info(f"Triggering Knowledge Base indexing for {repo_full_name}")
             
@@ -59,11 +28,7 @@ def process_installation_event(repo_full_name, repo_default_branch, action):
             process_push_event(repo_full_name, push_payload)
             
         elif action == 'deleted':
-            # 1. Delete SQLite data
-            delete_table(repo_full_name)
-            logger.info(f"Deleted SQLite table for {repo_full_name}")
-            
-            # 2. Delete Neo4j data
+            # 1. Delete Neo4j data
             try:
                 from Feature_Components.KnowledgeBase.graph_store import GraphStore
                 store = GraphStore()
@@ -74,7 +39,7 @@ def process_installation_event(repo_full_name, repo_default_branch, action):
             except Exception as e:
                 logger.error(f"Failed to clear Neo4j data: {e}")
                 
-            # 3. Delete Vector Index files
+            # 2. Delete Vector Index files
             try:
                 import shutil
                 import os
@@ -88,7 +53,7 @@ def process_installation_event(repo_full_name, repo_default_branch, action):
                     shutil.rmtree(repo_dir)
                     logger.info(f"Deleted vector index directory: {repo_dir}")
                     
-                # 4. Delete Cloned Repository Files
+                # 3. Delete Cloned Repository Files
                 repo_storage_path = Config.REPO_STORAGE_PATH
                 cloned_repo_dir = os.path.join(repo_storage_path, repo_full_name)
                 
