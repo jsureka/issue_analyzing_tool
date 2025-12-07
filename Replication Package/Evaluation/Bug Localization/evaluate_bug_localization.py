@@ -356,6 +356,18 @@ def evaluate():
             llm_func_metrics = calculate_metrics_at_k(selected_funcs_names, gt_funcs, [1, 3, 5, 10])
             llm_func_map = calculate_ap(selected_funcs_names, gt_funcs)
             
+            # LLM Metrics (Function/Class Combined) - k=[1, 3, 5, 10]
+            gt_func_class = list(set(gt_classes + gt_funcs))
+            pred_func_class = []
+            # Merge predictions similarly, preserving order preference (Funcs then Classes or vice versa, or interleaved?)
+            # Here we just append lists, simple union. 
+            # Note: A function and class could theoretically share a name, but context usually disambiguates.
+            # Using simple list concatenation for now.
+            pred_func_class = selected_funcs_names + selected_class_names
+            
+            llm_func_class_metrics = calculate_metrics_at_k(pred_func_class, gt_func_class, [1, 3, 5, 10])
+            llm_func_class_map = calculate_ap(pred_func_class, gt_func_class)
+
             # Combine Results
             result_row = {
                 'Repository': repo_name,
@@ -378,6 +390,10 @@ def evaluate():
                 'LLM Func MAP': llm_func_map,
                 **{f'LLM Func {k}': v for k, v in llm_func_metrics.items()},
                 
+                # LLM Metrics (Func/Class Merged)
+                'LLM FuncClass MAP': llm_func_class_map,
+                **{f'LLM FuncClass {k}': v for k, v in llm_func_class_metrics.items()},
+                
                 'Input Tokens': token_usage.get('input_tokens', token_usage.get('prompt_tokens', 0)) if token_usage else 0,
                 'Output Tokens': token_usage.get('output_tokens', token_usage.get('completion_tokens', 0)) if token_usage else 0,
                 'Total Tokens': token_usage.get('total_tokens', 0) if token_usage else 0,
@@ -391,15 +407,54 @@ def evaluate():
         return
 
     results_df = pd.DataFrame(results)
+    
+    def create_summary_table(df, prefix):
+        # prefix is 'LLM File' or 'LLM FuncClass'
+        # We want Hit@1, 3, 5, Overall Precision, Recall, All Correct, All Incorrect
+        # Using k=5 for Precision/Recall/Correctness as a representative "Top-N" metric unless otherwise specified
+        selected_k = 5
+        cols = {
+            f'{prefix} Hit@1': 'Hit@1',
+            f'{prefix} Hit@3': 'Hit@3',
+            f'{prefix} Hit@5': 'Hit@5',
+            f'{prefix} Precision@{selected_k}': f'Precision@{selected_k}',
+            f'{prefix} Recall@{selected_k}': f'Recall@{selected_k}',
+            f'{prefix} AllCorrect@{selected_k}': f'All Correct@{selected_k}',
+            f'{prefix} AllIncorrect@{selected_k}': f'All Incorrect@{selected_k}'
+        }
+        
+        # Group by Repository and mean
+        summary = df.groupby('Repository')[list(cols.keys())].mean()
+        summary.columns = [cols[c] for c in summary.columns]
+        
+        # Calculate Total Row (Mean across ALL issues, not mean of means)
+        total_values = df[list(cols.keys())].mean()
+        # Create a DataFrame for total to append properly
+        total_row = pd.DataFrame([total_values.values], columns=summary.columns, index=['Total'])
+        
+        summary = pd.concat([summary, total_row])
+        return summary
+
+    file_summary = create_summary_table(results_df, 'LLM File')
+    func_class_summary = create_summary_table(results_df, 'LLM FuncClass')
+
+    logger.info("Generated Summary tables.")
+
     try:
-        results_df.to_excel(RESULTS_FILE, index=False)
-        logger.info(f"Saved detailed results to {RESULTS_FILE}")
+        with pd.ExcelWriter(RESULTS_FILE) as writer:
+            file_summary.to_excel(writer, sheet_name='File Level Metrics')
+            func_class_summary.to_excel(writer, sheet_name='Func_Class Level Metrics')
+            results_df.to_excel(writer, sheet_name='Detailed Results', index=False)
+        logger.info(f"Saved results to {RESULTS_FILE}")
     except PermissionError:
         logger.error(f"Permission denied when writing to {RESULTS_FILE}. The file might be open.")
         backup_file = RESULTS_FILE.replace('.xlsx', f'_backup_{int(time.time())}.xlsx')
         logger.info(f"Attempting to save to backup file: {backup_file}")
         try:
-            results_df.to_excel(backup_file, index=False)
+            with pd.ExcelWriter(backup_file) as writer:
+                file_summary.to_excel(writer, sheet_name='File Level Metrics')
+                func_class_summary.to_excel(writer, sheet_name='Func_Class Level Metrics')
+                results_df.to_excel(writer, sheet_name='Detailed Results', index=False)
             logger.info(f"Results successfully saved to backup file: {backup_file}")
         except Exception as e:
             logger.error(f"Failed to save backup file: {e}")
@@ -407,76 +462,13 @@ def evaluate():
         logger.error(f"Failed to save results: {e}")
     
     print("\n" + "="*60)
-    print(f"LCA BENCHMARK RESULTS (Model: {results[0]['Model']})")
+    print(f"LCA BENCHMARK RESULTS")
     print("="*60)
-    print(f"Total Issues: {len(results_df)}")
-    print("-" * 30)
-    print("RETRIEVER METRICS (Search Stage - Files):")
-    print(f"MAP:         {results_df['Retriever MAP'].mean():.4f}")
-    print(f"Hit@1:       {results_df['Retriever Hit@1'].mean():.4f}")
-    print(f"Hit@5:       {results_df['Retriever Hit@5'].mean():.4f}")
-    print(f"Hit@10:      {results_df['Retriever Hit@10'].mean():.4f}")
-    print(f"Recall@10:   {results_df['Retriever Recall@10'].mean():.4f}")
-    print(f"Recall@20:   {results_df['Retriever Recall@20'].mean():.4f}")
-    print("-" * 30)
-    print("LLM METRICS (Final Selection - Files):")
-    print(f"MAP:         {results_df['LLM File MAP'].mean():.4f}")
-    print(f"Hit@1:       {results_df['LLM File Hit@1'].mean():.4f}")
-    print(f"Hit@3:       {results_df['LLM File Hit@3'].mean():.4f}")
-    print(f"Hit@5:       {results_df['LLM File Hit@5'].mean():.4f}")
-    print(f"Hit@10:      {results_df['LLM File Hit@10'].mean():.4f}")
-    print(f"Recall@3:    {results_df['LLM File Recall@3'].mean():.4f}")
-    print(f"Recall@5:    {results_df['LLM File Recall@5'].mean():.4f}")
-    print(f"Recall@10:   {results_df['LLM File Recall@10'].mean():.4f}")
-    print(f"Precision@1: {results_df['LLM File Precision@1'].mean():.4f}")
-    print(f"Precision@3: {results_df['LLM File Precision@3'].mean():.4f}")
-    print(f"Precision@10: {results_df['LLM File Precision@10'].mean():.4f}")
-    print(f"F1@3:        {results_df['LLM File F1@3'].mean():.4f}")
-    print(f"F1@5:        {results_df['LLM File F1@5'].mean():.4f}")
-    print(f"F1@10:       {results_df['LLM File F1@10'].mean():.4f}")
-    print(f"All Correct@3:    {results_df['LLM File AllCorrect@3'].mean():.4f}")
-    print(f"All Incorrect@3:  {results_df['LLM File AllIncorrect@3'].mean():.4f}")
-    print(f"Avg Buggy Files Detected@3: {results_df['LLM File AvgTP@3'].mean():.2f}")
-    print("-" * 30)
-    print("LLM METRICS (Final Selection - Classes):")
-    print(f"MAP:         {results_df['LLM Class MAP'].mean():.4f}")
-    print(f"Hit@1:       {results_df['LLM Class Hit@1'].mean():.4f}")
-    print(f"Hit@3:       {results_df['LLM Class Hit@3'].mean():.4f}")
-    print(f"Hit@5:       {results_df['LLM Class Hit@5'].mean():.4f}")
-    print(f"Hit@10:      {results_df['LLM Class Hit@10'].mean():.4f}")
-    print(f"Recall@3:    {results_df['LLM Class Recall@3'].mean():.4f}")
-    print(f"Recall@5:    {results_df['LLM Class Recall@5'].mean():.4f}")
-    print(f"Recall@10:   {results_df['LLM Class Recall@10'].mean():.4f}")
-    print(f"Precision@1: {results_df['LLM Class Precision@1'].mean():.4f}")
-    print(f"Precision@3: {results_df['LLM Class Precision@3'].mean():.4f}")
-    print(f"Precision@10: {results_df['LLM Class Precision@10'].mean():.4f}")
-    print(f"F1@3:        {results_df['LLM Class F1@3'].mean():.4f}")
-    print(f"F1@5:        {results_df['LLM Class F1@5'].mean():.4f}")
-    print(f"F1@10:       {results_df['LLM Class F1@10'].mean():.4f}")
-    print(f"All Correct@3:    {results_df['LLM Class AllCorrect@3'].mean():.4f}")
-    print(f"All Incorrect@3:  {results_df['LLM Class AllIncorrect@3'].mean():.4f}")
-    print("-" * 30)
-    print("LLM METRICS (Final Selection - Functions):")
-    print(f"MAP:         {results_df['LLM Func MAP'].mean():.4f}")
-    print(f"Hit@1:       {results_df['LLM Func Hit@1'].mean():.4f}")
-    print(f"Hit@3:       {results_df['LLM Func Hit@3'].mean():.4f}")
-    print(f"Hit@5:       {results_df['LLM Func Hit@5'].mean():.4f}")
-    print(f"Hit@10:      {results_df['LLM Func Hit@10'].mean():.4f}")
-    print(f"Recall@3:    {results_df['LLM Func Recall@3'].mean():.4f}")
-    print(f"Recall@5:    {results_df['LLM Func Recall@5'].mean():.4f}")
-    print(f"Recall@10:   {results_df['LLM Func Recall@10'].mean():.4f}")
-    print(f"Precision@1: {results_df['LLM Func Precision@1'].mean():.4f}")
-    print(f"Precision@3: {results_df['LLM Func Precision@3'].mean():.4f}")
-    print(f"Precision@10: {results_df['LLM Func Precision@10'].mean():.4f}")
-    print(f"F1@3:        {results_df['LLM Func F1@3'].mean():.4f}")
-    print(f"F1@5:        {results_df['LLM Func F1@5'].mean():.4f}")
-    print(f"F1@10:       {results_df['LLM Func F1@10'].mean():.4f}")
-    print(f"All Correct@3:    {results_df['LLM Func AllCorrect@3'].mean():.4f}")
-    print(f"All Incorrect@3:  {results_df['LLM Func AllIncorrect@3'].mean():.4f}")
-    print("-" * 30)
-    print("TOKEN USAGE:")
-    print(f"Avg Total Tokens:    {results_df['Total Tokens'].mean():.0f}")
-    print(f"Total All Tokens:    {results_df['Total Tokens'].sum():.0f}")
+    print("FILE LEVEL METRICS:")
+    print(file_summary)
+    print("-" * 60)
+    print("FUNCTION/CLASS LEVEL METRICS:")
+    print(func_class_summary)
     print("="*60)
 
 if __name__ == "__main__":
