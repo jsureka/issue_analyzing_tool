@@ -8,6 +8,18 @@ from .llm_service import LLMService
 from .issue_processor import IssueProcessor
 from .embedder import CodeEmbedder
 
+# Try to import Config from correct location
+try:
+    from ...config import Config
+except ImportError:
+    try:
+        from config import Config
+    except ImportError:
+        # Fallback
+        class Config:
+            RETRIEVER_TOP_K = 20
+            LLM_SELECTION_COUNT = 3
+
 logger = logging.getLogger(__name__)
 
 class BugLocalization:
@@ -36,18 +48,21 @@ class BugLocalization:
         
         self.llm_service = LLMService()
         
-    def localize(self, issue_title: str, issue_body: str, k: int = 20) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], Dict[str, Any]]:
+    def localize(self, issue_title: str, issue_body: str, k: int = None) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], Dict[str, Any]]:
         """
         Localize buggy functions for an issue.
         
         Args:
             issue_title: Issue title
             issue_body: Issue body
-            k: Number of candidates to retrieve (default 20 for LCA)
+            k: Number of candidates to retrieve (defaults to Config.RETRIEVER_TOP_K)
             
         Returns:
             Tuple[List[Dict], List[Dict], Dict]: (Final Ranked Candidates, Initial Retrieved Candidates, Token Usage)
         """
+        if k is None:
+            k = Config.RETRIEVER_TOP_K
+            
         logger.info(f"Starting bug localization for: {issue_title}")
         
         # 1. Process Issue
@@ -76,10 +91,10 @@ class BugLocalization:
         except Exception as e:
             logger.error(f"LLM selection failed: {e}")
             # Fallback: Use retriever order
-            return candidates[:3], candidates, {}
+            return candidates[:Config.LLM_SELECTION_COUNT], candidates, {}
 
-        # Limit to top 3 selected functions
-        selected_funcs = selected_funcs[:3]
+        # Limit to configured number of selected functions
+        selected_funcs = selected_funcs[:Config.LLM_SELECTION_COUNT]
 
         # Construct Final Ranked List
         # 1. LLM Selected (Top Priority)

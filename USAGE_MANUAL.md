@@ -233,11 +233,6 @@ GEMINI_API_KEY=your_gemini_api_key
 LLM_MODEL_NAME=gemini-2.0-flash
 LLM_TEMPERATURE=0.2
 
-# Model Paths
-DUPLICATE_BR_MODEL_PATH=path/to/duplicate_model
-SEVERITY_PREDICTION_MODEL_PATH=path/to/severity_model
-BUGLOCALIZATION_MODEL_PATH=path/to/buglocalization_model
-
 # Neo4j Configuration
 NEO4J_URI=bolt://localhost:7687
 NEO4J_USER=neo4j
@@ -284,27 +279,29 @@ method seems to be comparing hashes incorrectly.
 3. Check for the automated comment:
 
 ````markdown
-## 🔍 Bug Localization Results
+## 🔍 INSIGHT Bug Localization Results
 
-**Confidence:** High (92% probability) 🟢
+### Relevant functions where the bug is likely to occur
 
-### 🧠 Technical Analysis
+1. **[`validate_password`](...)** in `auth/validator.py`
+
+2. **[`login`](...)** in `auth/authentication.py`
+
+3. **[`hash_password`](...)** in `auth/utils.py`
+
+## 🧠 Technical Analysis
+
 The issue stems from an incorrect hash comparison in `validate_password`. The function uses `==` instead of `bcrypt.checkpw`, which causes the comparison to fail even for valid passwords...
 
-### 🧪 Hypothesis
-The `validate_password` function in `auth/validator.py` is implementing a direct string comparison for password hashes, which is incorrect and insecure. It should use the library's verification method.
+## 🛠️ Suggested Solution
 
-### 🛠️ Suggested Patch
 ```python
 def validate_password(input_password, stored_hash):
 -    return input_password == stored_hash
 +    return bcrypt.checkpw(input_password.encode('utf-8'), stored_hash)
 ```
 
-### Top Candidate Functions
-
-#### 1. `validate_password` in `auth/validator.py` (Score: 0.92)
-**Lines 45-67** | [View on GitHub](...)
+> ⚠️ **Note:** This solution is AI-generated. Please review carefully.
 ````
 
 ---

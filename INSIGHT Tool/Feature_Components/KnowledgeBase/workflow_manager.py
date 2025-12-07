@@ -12,6 +12,17 @@ from .retriever import DenseRetriever
 from .graph_store import GraphStore
 from .issue_processor import IssueProcessor
 
+# Try to import Config from correct location
+try:
+    from ...config import Config
+except ImportError:
+    try:
+        from config import Config
+    except ImportError:
+        # Fallback
+        class Config:
+            LLM_SELECTION_COUNT = 3
+
 logger = logging.getLogger(__name__)
 
 class GraphState(TypedDict):
@@ -80,9 +91,9 @@ class WorkflowManager:
             state["issue_body"]
         )
         
-        # Format concise analysis from top 3 functions only
+        # Format concise analysis from top configured functions only
         analysis = ""
-        top_funcs = [f for f in selected_functions[:3] if f.get('llm_reasoning')]
+        top_funcs = [f for f in selected_functions[:Config.LLM_SELECTION_COUNT] if f.get('llm_reasoning')]
         
         if top_funcs:
             for idx, func in enumerate(top_funcs, 1):
@@ -90,7 +101,7 @@ class WorkflowManager:
                 analysis += f"   - {func.get('llm_reasoning', 'Selected as likely buggy function')}\n\n"
         else:
             # Fallback if no reasoning
-            for idx, func in enumerate(selected_functions[:3], 1):
+            for idx, func in enumerate(selected_functions[:Config.LLM_SELECTION_COUNT], 1):
                 analysis += f"{idx}. `{func['name']}` in `{func['file_path']}`\n\n"
             
         return {

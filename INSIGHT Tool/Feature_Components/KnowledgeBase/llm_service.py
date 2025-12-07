@@ -95,6 +95,38 @@ class LLMService:
         """Check if LLM service is available"""
         return self.llm is not None
 
+    @staticmethod
+    def _optimize_token_usage(code: str) -> str:
+        """
+        Optimize code snippet for token usage.
+        - Removes consecutive spaces/tabs
+        - Removes empty lines
+        - Reduces multiple newlines
+        """
+        if not code:
+            return ""
+        
+        import re
+        
+        # 1. Replace tabs with 4 spaces (to standardise before reduction)
+        code = code.replace('\t', '    ')
+        
+        # 2. Iterate line by line to trim
+        lines = code.splitlines()
+        optimized_lines = []
+        for line in lines:
+            stripped = line.rstrip() # Keep indentation
+            if stripped:
+                optimized_lines.append(stripped)
+        
+        # 3. Join back
+        code = "\n".join(optimized_lines)
+        
+        # 4. Remove excessive newlines (more than 2)
+        code = re.sub(r'\n{3,}', '\n\n', code)
+        
+        return code
+
 
 
 
@@ -218,8 +250,12 @@ Generate a concise solution plan.
         try:
             candidates_text = ""
             for i, cand in enumerate(candidates):
-                # Increase context to 1000 chars
-                code_snippet = cand.get('code', '')[:1000] 
+                # Optimize code token usage
+                raw_code = cand.get('code', '')
+                optimized_code = self._optimize_token_usage(raw_code)
+                
+                # Increase context to 1500 chars since we saved space
+                code_snippet = optimized_code[:1500] 
                 class_info = f"Class: {cand.get('class_name')}\n" if cand.get('class_name') else ""
                 
                 # Add Graph Context if available
@@ -234,21 +270,21 @@ Generate a concise solution plan.
                 candidates_text += f"Candidate {i} (ID: {cand.get('id')}):\nFile: {cand.get('file_path')}\n{class_info}Function: {cand.get('name')}\n{graph_context}Code:\n```\n{code_snippet}\n```\n\n"
 
             prompt = ChatPromptTemplate.from_messages([
-                ("system", """You are an expert software engineer debugging a complex system.
+                ("system", f"""You are an expert software engineer debugging a complex system.
 Your task is to identify the **ROOT CAUSE** function(s) that need to be modified to fix the bug.
 
 **CRITICAL INSTRUCTIONS**:
 1.  **Analyze Code Snippets**: You are provided with code snippets retrieved from the vector database. **YOU MUST USE THESE SNIPPETS** to make your decision. Do not hallucinate code that is not present.
 2.  **Filter Irrelevant Candidates**: Many candidates may be irrelevant. If a candidate's code does not match the issue logic, **DISCARD IT**. Do not select it just because it was retrieved.
 3.  **Look Deeper**: Do not just pick the public entry point (e.g., `list_replicas`). Look for the internal helper function or implementation method (e.g., `_list_replicas_internal`) where the logic actually resides.
-4.  **Multi-Selection**: You MUST select EXACTLY 5 most likely functions (or fewer if less than 5 candidates are provided). We prioritize Recall. Rank them from most likely to least likely.
+4.  **Multi-Selection**: You MUST select EXACTLY {Config.LLM_SELECTION_COUNT} most likely functions (or fewer if less than {Config.LLM_SELECTION_COUNT} candidates are provided). We prioritize Recall. Rank them from most likely to least likely.
 
-Return a JSON object with a single key "selected_functions" containing a list of EXACTLY 5 objects (or fewer if less than 5 candidates provided).
+Return a JSON object with a single key "selected_functions" containing a list of EXACTLY {Config.LLM_SELECTION_COUNT} objects (or fewer if less than {Config.LLM_SELECTION_COUNT} candidates provided).
 Each object must have:
 - "id": The candidate ID.
 - "reasoning": Brief explanation of why this is the root cause, referencing specific lines or logic from the provided snippet.
 
-Example: {{ "selected_functions": [ {{ "id": "func_1", "reasoning": "Snippet shows logic error in loop condition at line 5" }}, {{ "id": "func_2", "reasoning": "Snippet confirms it handles null input from func_1 incorrectly" }}, {{ "id": "func_3", "reasoning": "Related helper that processes the data" }}, {{ "id": "func_4", "reasoning": "Caller function that invokes func_1" }}, {{ "id": "func_5", "reasoning": "Utility function used in error path" }} ] }}"""),
+Example: {{{{ "selected_functions": [ {{{{ "id": "func_1", "reasoning": "Snippet shows logic error in loop condition at line 5" }}}}, {{{{ "id": "func_2", "reasoning": "Snippet confirms it handles null input from func_1 incorrectly" }}}} ] }}}}"""),
                 ("human", """Issue: {title}
 Description: {body}
 
@@ -277,7 +313,8 @@ Select the top 5 buggy function(s):""")
             selected_items = result.get("selected_functions", [])
             
             selected_candidates = []
-            for item in selected_items[:5]:  # Enforce top 5 limit
+            selected_candidates = []
+            for item in selected_items[:Config.LLM_SELECTION_COUNT]:  # Enforce configured limit
                 cand_id = item.get('id')
                 # Find original candidate
                 orig_cand = next((c for c in candidates if c.get('id') == cand_id), None)

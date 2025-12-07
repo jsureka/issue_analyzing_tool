@@ -58,13 +58,14 @@ INSIGHT (Issue Analyzing Tool) is a GitHub application that provides automated b
 ## Core Components
 
 ### 1. Bug Localization Pipeline (`bug_localization.py`)
-The main RAG pipeline that orchestrates bug localization:
+The core RAG retrieval pipeline for candidate identification:
 
-1. **Query Generation**: LLM generates semantic search query from issue
-2. **Dense Retrieval**: Retrieves top-20 candidate functions using UnixCoder embeddings
-3. **Graph Enrichment**: Adds callers/callees context from Neo4j
-4. **LLM Selection**: GPT-4o/Gemini selects top-5 most likely buggy functions
-5. **Return**: Returns ranked list (top-3 used for evaluation)
+1. **Issue Processing**: Preprocesses issue title and body
+2. **Query Generation**: LLM generates semantic search query from issue
+3. **Dense Retrieval**: Retrieves top-20 candidate functions using UnixCoder embeddings
+4. **Graph Enrichment**: Adds callers/callees context from Neo4j and reads code snippets
+5. **LLM Selection**: GPT-4o/Gemini selects top-5 most likely buggy functions with reasoning
+6. **Return**: Returns ranked list of candidates (top-3 selected functions + remaining candidates)
 
 ### 2. Knowledge Base Components
 
@@ -94,10 +95,14 @@ Provides LLM capabilities:
 Supports: GPT-4o, Gemini 2.0 Flash
 
 ### 4. Workflow Manager (`workflow_manager.py`)
-LangGraph-based orchestration (optional):
-- Manages multi-step bug localization workflow
-- Uses `BugLocalization` internally
-- Adds patch generation step
+LangGraph-based orchestration (main flow for GitHub app):
+- Orchestrates full bug localization workflow in 3 steps
+- Step 1: Calls `BugLocalization` for candidate retrieval and selection
+- Step 2: Extracts analysis/reasoning from LLM-selected functions
+- Step 3: Generates patch suggestions using LLM
+- Returns complete results with localization, analysis, and patches
+
+**Note**: The GitHub integration uses `WorkflowManager` via the `BugLocalization()` API function in `knowledgeBase.py`.
 
 ## Data Flow
 
@@ -130,7 +135,7 @@ GitHub Comment
 | **Vector Search** | FAISS | Similarity search |
 | **Graph DB** | Neo4j | Knowledge graph |
 | **Parsing** | tree-sitter | AST extraction |
-| **Orchestration** | LangGraph (optional) | Workflow management |
+| **Orchestration** | LangGraph | Workflow management |
 | **Web Framework** | Flask | Webhook handling |
 
 ## Evaluation Results

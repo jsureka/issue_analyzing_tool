@@ -1,6 +1,6 @@
 # INSIGHT - Automated Bug Localization Tool
 
-[![GitHub](https://img.shields.io/badge/GitHub-App-blue)](https://github.com/apps)
+[![GitHub](https://img.shields.io/badge/GitHub-App-blue)](https://github.com/apps/insight-issues)
 [![Python](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 
 INSIGHT is a GitHub application that automatically localizes bugs in software repositories using a RAG (Retrieval-Augmented Generation) pipeline. It analyzes GitHub issues and identifies the specific files and functions that need to be modified to fix the bug.
@@ -57,7 +57,7 @@ cp .env.example .env
 5. Run the application:
 ```bash
 cd "INSIGHT Tool"
-python app.py
+python main.py
 ```
 
 ## Configuration
@@ -95,6 +95,7 @@ GITHUB_PRIVATE_KEY_PATH=path_to_key.pem
 Run the evaluation script:
 
 ```bash
+cd "Replication Package\Evaluation\Bug Localization"
 python evaluate_bug_localization.py
 ```
 

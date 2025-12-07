@@ -183,6 +183,7 @@ cython_debug/
 .kiro
 
 Data_Storage
+temp_dataset_repos/
 temp_repos/
 *INSIGHT Tool/insight_repos/
 *INSIGHT Tool/telemetry_logs/

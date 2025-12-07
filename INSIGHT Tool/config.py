@@ -37,6 +37,10 @@ class Config:
     LLM_MODEL_NAME = os.getenv('LLM_MODEL_NAME', 'gemini-2.5-flash')
     LLM_TEMPERATURE = float(os.getenv('LLM_TEMPERATURE', 0.2))
     
+    # Candidate Selection
+    RETRIEVER_TOP_K = int(os.getenv('RETRIEVER_TOP_K', 20))
+    LLM_SELECTION_COUNT = int(os.getenv('LLM_SELECTION_COUNT', 10))
+    
     # Paths
     # Use a fixed path for repos instead of tempdir for persistence if needed, 
     # or keep tempdir but make it configurable.
