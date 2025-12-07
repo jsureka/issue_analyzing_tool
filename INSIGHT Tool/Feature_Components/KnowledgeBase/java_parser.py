@@ -289,13 +289,17 @@ class JavaParser(LanguageParser):
                                             function_names.append(func_name)
                                             break
                     
+                    # Extract Javadoc
+                    docstring = self._extract_javadoc(node, source_code)
+
                     class_info = ClassInfo(
                         name=name,
                         start_line=start_line,
                         end_line=end_line,
                         functions=function_names,
                         language="java",
-                        class_type=class_type
+                        class_type=class_type,
+                        docstring=docstring
                     )
                     classes.append(class_info)
                     

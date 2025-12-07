@@ -234,7 +234,7 @@ Generate a concise solution plan.
     @retry_with_backoff
     def select_functions(self, issue_title: str, issue_body: str, candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
-        Select the exact buggy function(s) from a list of candidates.
+        Select the exact buggy code entities (classes/functions) from a list of candidates.
         
         Args:
             issue_title: Issue title
@@ -242,12 +242,18 @@ Generate a concise solution plan.
             candidates: List of candidate dicts
             
         Returns:
-            List of selected candidate dicts with 'reasoning'
+            Tuple of (List of selected candidate dicts with 'reasoning' and 'entity_type', token_usage)
         """
         if not self.is_available() or not candidates:
-            return candidates[:1] # Fallback
+            return candidates[:1], {} # Fallback
 
         try:
+            # DEBUG: Log input candidates breakdown
+            n_files = sum(1 for c in candidates if c.get('entity_type') == 'file')
+            n_classes = sum(1 for c in candidates if c.get('entity_type') == 'class')
+            n_funcs = sum(1 for c in candidates if c.get('entity_type') == 'function')
+            logger.info(f"LLM Input Candidates: {n_files} Files, {n_classes} Classes, {n_funcs} Functions")
+
             candidates_text = ""
             for i, cand in enumerate(candidates):
                 # Optimize code token usage
@@ -256,7 +262,9 @@ Generate a concise solution plan.
                 
                 # Increase context to 1500 chars since we saved space
                 code_snippet = optimized_code[:1500] 
-                class_info = f"Class: {cand.get('class_name')}\n" if cand.get('class_name') else ""
+                entity_type = cand.get('entity_type', 'function')
+                type_label = entity_type.upper()
+                class_info = f"Class: {cand.get('class_name')}\n" if cand.get('class_name') and entity_type == 'function' else ""
                 
                 # Add Graph Context if available
                 graph_context = ""
@@ -267,41 +275,48 @@ Generate a concise solution plan.
                     if cand.get('callees'):
                         graph_context += f"  - Calls: {', '.join(cand['callees'][:5])}\n"
                 
-                candidates_text += f"Candidate {i} (ID: {cand.get('id')}):\nFile: {cand.get('file_path')}\n{class_info}Function: {cand.get('name')}\n{graph_context}Code:\n```\n{code_snippet}\n```\n\n"
+                candidates_text += f"Candidate {i} (ID: {cand.get('id')}):\nType: {type_label}\nFile: {cand.get('file_path')}\n{class_info}Name: {cand.get('name')}\n{graph_context}Code/Content:\n```\n{code_snippet}\n```\n\n"
 
             prompt = ChatPromptTemplate.from_messages([
                 ("system", f"""You are an expert software engineer debugging a complex system.
-Your task is to identify the **ROOT CAUSE** function(s) that need to be modified to fix the bug.
+Your task is to identify the **ROOT CAUSE** code entities (files, classes, or functions) that need to be modified to fix the bug.
 
 **CRITICAL INSTRUCTIONS**:
-1.  **Analyze Code Snippets**: You are provided with code snippets retrieved from the vector database. **YOU MUST USE THESE SNIPPETS** to make your decision. Do not hallucinate code that is not present.
-2.  **Filter Irrelevant Candidates**: Many candidates may be irrelevant. If a candidate's code does not match the issue logic, **DISCARD IT**. Do not select it just because it was retrieved.
-3.  **Look Deeper**: Do not just pick the public entry point (e.g., `list_replicas`). Look for the internal helper function or implementation method (e.g., `_list_replicas_internal`) where the logic actually resides.
-4.  **Multi-Selection**: You MUST select EXACTLY {Config.LLM_SELECTION_COUNT} most likely functions (or fewer if less than {Config.LLM_SELECTION_COUNT} candidates are provided). We prioritize Recall. Rank them from most likely to least likely.
+1.  **Analyze Candidates**: You are provided with mixed candidates (FILES, CLASSES, FUNCTIONS). Analyze them based on the Issue Description.
+2.  **Select Granularly**:
+    *   If a specific **FUNCTION** contains the bug logic, select the FUNCTION.
+    *   If the bug involves shared state or multiple methods in a class, selecting the **CLASS** is acceptable.
+    *   If the issue implies a missing file or broad architectural issue in a file, selecting the **FILE** is acceptable.
+    *   **Prioritize Specificity**: Prefer Functions > Classes > Files.
+3.  **Entity Type Awareness**: Explicitly state the `entity_type` ("function", "class", "file") for your selection.
+4.  **Multi-Selection**: You MUST select EXACTLY {Config.LLM_SELECTION_COUNT} most likely entities. Rank them from most likely to least likely.
 
-Return a JSON object with a single key "selected_functions" containing a list of EXACTLY {Config.LLM_SELECTION_COUNT} objects (or fewer if less than {Config.LLM_SELECTION_COUNT} candidates provided).
+Return a JSON object with a single key "selected_entities" containing a list of objects.
 Each object must have:
-- "id": The candidate ID.
-- "reasoning": Brief explanation of why this is the root cause, referencing specific lines or logic from the provided snippet.
+- "id": The candidate ID from the provided list.
+- "entity_type": "function", "class", or "file".
+- "reasoning": Brief explanation of why this entity is the root cause.
 
-Example: {{{{ "selected_functions": [ {{{{ "id": "func_1", "reasoning": "Snippet shows logic error in loop condition at line 5" }}}}, {{{{ "id": "func_2", "reasoning": "Snippet confirms it handles null input from func_1 incorrectly" }}}} ] }}}}"""),
+Example: {{{{ "selected_entities": [ {{{{ "id": "func_1", "entity_type": "function", "reasoning": "Loop condition error at line 5" }}}}, {{{{ "id": "class_2", "entity_type": "class", "reasoning": "Incorrect state management in this class" }}}} ] }}}}"""),
                 ("human", """Issue: {title}
 Description: {body}
 
 Candidate Functions:
 {candidates_text}
 
-Select the top 5 buggy function(s):""")
+Select the top {count} buggy entity/entities:""")
             ])
             
             chain = prompt | self.llm
             response = chain.invoke({
                 "title": issue_title,
                 "body": issue_body,
-                "candidates_text": candidates_text
+                "candidates_text": candidates_text,
+                "count": Config.LLM_SELECTION_COUNT
             })
             
             content = response.content
+            logger.info(f"Raw LLM Response: {content}")
             # Cleanup markdown
             if "```json" in content:
                 content = content.split("```json")[1].split("```")[0]
@@ -310,18 +325,20 @@ Select the top 5 buggy function(s):""")
                 
             import json
             result = json.loads(content)
-            selected_items = result.get("selected_functions", [])
+            selected_items = result.get("selected_entities", [])
             
             selected_candidates = []
-            selected_candidates = []
-            for item in selected_items[:Config.LLM_SELECTION_COUNT]:  # Enforce configured limit
+            for item in selected_items[:Config.LLM_SELECTION_COUNT]:
                 cand_id = item.get('id')
+                if not cand_id: continue
+                
                 # Find original candidate
                 orig_cand = next((c for c in candidates if c.get('id') == cand_id), None)
+                
                 if orig_cand:
-                    # Create a copy to avoid mutating original list if needed
                     new_cand = orig_cand.copy()
                     new_cand['llm_reasoning'] = item.get('reasoning')
+                    new_cand['entity_type'] = item.get('entity_type', orig_cand.get('entity_type', 'function'))
                     selected_candidates.append(new_cand)
             
             # Extract token usage

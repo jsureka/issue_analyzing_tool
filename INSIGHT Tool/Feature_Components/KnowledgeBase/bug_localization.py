@@ -115,15 +115,16 @@ class BugLocalization:
     def _enrich_candidates(self, retrieval_results) -> List[Dict[str, Any]]:
         """Enrich retrieval results with code and graph context."""
         candidates = []
-        func_ids = [r.function_id for r in retrieval_results]
+        entity_ids = [r.id for r in retrieval_results]
         
         # Batch fetch graph neighbors
-        neighbors_map = self.graph_store.get_function_neighbors(func_ids)
+        neighbors_map = self.graph_store.get_function_neighbors(entity_ids)
         
         for res in retrieval_results:
             cand = {
-                'id': res.function_id,
-                'name': res.function_name,
+                'id': res.id,
+                'entity_type': res.entity_type,
+                'name': res.name,
                 'file_path': res.file_path,
                 'class_name': res.class_name,
                 'score': res.similarity_score,
@@ -138,12 +139,15 @@ class BugLocalization:
                 full_path = os.path.join(self.repo_path, res.file_path)
                 if os.path.exists(full_path):
                     with open(full_path, 'r', encoding='utf-8', errors='ignore') as f:
-                        lines = f.readlines()
-                        start = max(0, res.start_line - 1)
-                        end = min(len(lines), res.end_line)
-                        code_content = "".join(lines[start:end])
+                        if res.entity_type == 'file':
+                             code_content = f.read() # Read whole file for 'file' type
+                        else:
+                            lines = f.readlines()
+                            start = max(0, res.start_line - 1)
+                            end = min(len(lines), res.end_line)
+                            code_content = "".join(lines[start:end])
             except Exception as e:
-                logger.warning(f"Could not read code for {res.function_name}: {e}")
+                logger.warning(f"Could not read code for {res.name}: {e}")
             
             if not code_content:
                 # Fallback
@@ -152,7 +156,7 @@ class BugLocalization:
             cand['code'] = code_content
             
             # 2. Get Graph Neighbors
-            neighbors = neighbors_map.get(res.function_id, {})
+            neighbors = neighbors_map.get(res.id, {})
             cand['callers'] = neighbors.get('callers', [])
             cand['callees'] = neighbors.get('callees', [])
             

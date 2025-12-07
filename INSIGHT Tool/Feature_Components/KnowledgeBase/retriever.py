@@ -16,15 +16,16 @@ logger = logging.getLogger(__name__)
 @dataclass
 class RetrievalResult:
     """Result from retrieval"""
-    function_id: str
-    function_name: str
+    id: str
+    entity_type: str  # 'function', 'class', 'file'
+    name: str
     file_path: str
-    class_name: Optional[str]
-    start_line: int
-    end_line: int
-    signature: str
-    docstring: Optional[str]
-    similarity_score: float
+    class_name: Optional[str] = None
+    start_line: int = 0
+    end_line: int = 0
+    signature: str = ""
+    docstring: Optional[str] = None
+    similarity_score: float = 0.0
 
 
 class DenseRetriever:
@@ -84,7 +85,7 @@ class DenseRetriever:
 
     def retrieve(self, issue_embedding: np.ndarray, k: int = 10) -> List[RetrievalResult]:
         """
-        Retrieve top-K most similar functions
+        Retrieve top-K most similar code entities (functions, classes, or files)
         
         Args:
             issue_embedding: Issue embedding vector
@@ -109,8 +110,9 @@ class DenseRetriever:
         for idx, score, metadata in zip(indices, scores, metadata_list):
             try:
                 result = RetrievalResult(
-                    function_id=metadata.get('id', ''),
-                    function_name=metadata.get('name', ''),
+                    id=metadata.get('id', ''),
+                    entity_type=metadata.get('entity_type', 'function'), # Default to function for backwards compatibility
+                    name=metadata.get('name', ''),
                     file_path=metadata.get('file_path', ''),
                     class_name=metadata.get('class_name'),
                     start_line=metadata.get('start_line', 0),
@@ -128,7 +130,8 @@ class DenseRetriever:
 
     def retrieve_files(self, issue_embedding: np.ndarray, k: int = 20) -> List[str]:
         """
-        Retrieve top-K most relevant files by aggregating function scores.
+        Retrieve top-K most relevant files using a mix of direct file retrieval 
+        and aggregation of function/class scores.
         
         Args:
             issue_embedding: Issue embedding vector
@@ -141,7 +144,7 @@ class DenseRetriever:
             logger.error("No index loaded. Call load_index() first")
             return []
             
-        # Retrieve a large number of functions to get good file coverage
+        # Retrieve a large number of entities to get good file coverage
         indices, scores, metadata_list = self.vector_store.search(issue_embedding, k=200)
         
         if not indices:
@@ -150,11 +153,24 @@ class DenseRetriever:
         file_scores = {}
         for idx, score, metadata in zip(indices, scores, metadata_list):
             file_path = metadata.get('file_path')
+            entity_type = metadata.get('entity_type', 'function')
+            
             if file_path:
                 if file_path not in file_scores:
                     file_scores[file_path] = 0.0
-                # Aggregate scores (max or sum? Max is better for "containing a buggy function")
-                file_scores[file_path] = max(file_scores[file_path], score)
+                
+                # Boost logic: 
+                # Direct file match is strong signal.
+                # Class match is medium signal.
+                # Function match is specific signal.
+                
+                current_score = score
+                if entity_type == 'file':
+                    current_score *= 1.2 # Boost direct file matches
+                elif entity_type == 'class':
+                    current_score *= 1.1 # Boost class matches slightly
+                    
+                file_scores[file_path] = max(file_scores[file_path], current_score)
                 
         # Sort by score
         sorted_files = sorted(file_scores.items(), key=lambda x: x[1], reverse=True)

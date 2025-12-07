@@ -226,13 +226,17 @@ class PythonParser(LanguageParser):
                                             function_names.append(func_name)
                                             break
                     
+                    # Extract docstring
+                    docstring = self._extract_docstring(node, source_code)
+
                     class_info = ClassInfo(
                         name=name,
                         start_line=start_line,
                         end_line=end_line,
                         functions=function_names,
                         language="python",
-                        class_type="class"
+                        class_type="class",
+                        docstring=docstring
                     )
                     classes.append(class_info)
                     

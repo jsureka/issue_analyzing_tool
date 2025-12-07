@@ -253,6 +253,7 @@ class RepositoryIndexer:
             
             function_metadata.append({
                 'id': self._generate_id(repo_name, func_file_path or "", func.name, str(func.start_line)),
+                'entity_type': 'function',
                 'name': func.name,
                 'file_path': func_file_path or "",
                 'class_name': func.class_name,
@@ -263,10 +264,81 @@ class RepositoryIndexer:
                 'language': func.language
             })
         
+        # --- Generate embeddings for Classes ---
+        class_texts = []
+        class_metadata = []
+        
+        for cls in all_classes:
+            # Prepare text for embedding: Docstring + Method Signatures (body is too large)
+            text = f"class {cls.name}\n"
+            if cls.docstring:
+                text += f"{cls.docstring}\n"
+            
+            # Find methods in this class to add their signatures
+            methods_in_class = [f for f in all_functions if f.class_name == cls.name]
+            for m in methods_in_class:
+                text += f"{m.signature}\n"
+                
+            class_texts.append(text)
+            
+            # Find file path
+            cls_file_path = None
+            for file_path, file_info in file_info_map.items():
+                if cls in file_info['classes']:
+                    cls_file_path = file_path
+                    break
+
+            class_metadata.append({
+                'id': self._generate_id(repo_name, cls_file_path or "", cls.name),
+                'entity_type': 'class',
+                'name': cls.name,
+                'file_path': cls_file_path or "",
+                'start_line': cls.start_line,
+                'end_line': cls.end_line,
+                'docstring': cls.docstring,
+                'language': cls.language
+            })
+            
+        # --- Generate embeddings for Files ---
+        file_texts = []
+        file_metadata = []
+        
+        for file_path, file_info in file_info_map.items():
+            # Prepare text: Imports + Docstring + List of Classes/Functions
+            text = f"File: {file_path}\n"
+            
+            # Add imports
+            if file_info['imports']:
+                text += "Imports:\n" + "\n".join(file_info['imports']) + "\n"
+                
+            # Add file-level docstring if likely present (first function docstring often misattributed, check heuristic?)
+            # Simplified: just list content
+            
+            text += "Contents:\n"
+            for c in file_info['classes']:
+                text += f"class {c.name}\n"
+            for f in file_info['functions']:
+                if not f.class_name: # Top level functions
+                    text += f"function {f.name}\n"
+            
+            file_texts.append(text)
+            
+            file_metadata.append({
+                'id': file_info['id'],
+                'entity_type': 'file',
+                'name': str(file_path),
+                'file_path': str(file_path),
+                'language': file_info['language']
+            })
+        
         # Generate embeddings in batches
-        if function_texts:
-            embeddings = self.embedder.embed_batch(function_texts, batch_size=32)
-            self.vector_store.add_vectors(embeddings, function_metadata)
+        # Generate embeddings in batches
+        all_texts = function_texts + class_texts + file_texts
+        all_metadata = function_metadata + class_metadata + file_metadata
+        
+        if all_texts:
+            embeddings = self.embedder.embed_batch(all_texts, batch_size=32)
+            self.vector_store.add_vectors(embeddings, all_metadata)
         
         # Save indices
         logger.info("Saving indices...")
