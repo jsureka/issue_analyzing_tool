@@ -29,6 +29,7 @@ class ClassInfo:
     end_line: int
     functions: List[str]  # List of function names in this class
     language: str  # "python", "java", etc.
+    docstring: Optional[str] = None
     class_type: str = "class"  # "class", "interface", "enum"
 
 

@@ -278,7 +278,7 @@ class CommentGenerator:
             # --- Comment 3: Suggested Patch ---
             llm_patch = results.get('llm_patch')
             if llm_patch:
-                comment3 = "## 🛠️ Suggested Solution\n\n"
+                comment3 = "## 🛠️ How developers Generally Address Similar Bugs\n\n"
                 # Check if it looks like code or text, but user requested bullet points/steps by default
                 # We will rely on the LLM prompt to format this correctly as bullet points or code
                 comment3 += f"{llm_patch}\n\n"

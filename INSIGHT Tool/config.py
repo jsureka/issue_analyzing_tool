@@ -38,8 +38,9 @@ class Config:
     LLM_TEMPERATURE = float(os.getenv('LLM_TEMPERATURE', 0.2))
     
     # Candidate Selection
-    RETRIEVER_TOP_K = int(os.getenv('RETRIEVER_TOP_K', 20))
+    RETRIEVER_TOP_K = int(os.getenv('RETRIEVER_TOP_K', 100))
     LLM_SELECTION_COUNT = int(os.getenv('LLM_SELECTION_COUNT', 10))
+    LLM_INPUT_LIMIT = int(os.getenv('LLM_INPUT_LIMIT', 50))
     
     # Paths
     # Use a fixed path for repos instead of tempdir for persistence if needed, 

@@ -4,20 +4,66 @@ import re
 from collections import Counter
 import os
 
+def detect_language(file_path):
+    """Detect programming language from file extension"""
+    if file_path.endswith('.py'):
+        return 'python'
+    elif file_path.endswith('.java'):
+        return 'java'
+    return 'unknown'
+
+def extract_entities(context, language, classes_set, functions_set):
+    """Extract class and function names from diff hunk context"""
+    if not context:
+        return
+    
+    if language == 'python':
+        # Extract class names: class ClassName or class ClassName(Base)
+        class_match = re.search(r'class\s+([A-Z][a-zA-Z0-9_]*)', context)
+        if class_match:
+            classes_set.add(class_match.group(1))
+            return  # If we found a class, don't look for functions in the same line
+        
+        # Extract function/method names: def function_name
+        func_match = re.search(r'def\s+([a-zA-Z_][a-zA-Z0-9_]*)', context)
+        if func_match:
+            functions_set.add(func_match.group(1))
+    
+    elif language == 'java':
+        # Extract class names: class ClassName, public class ClassName, etc.
+        class_match = re.search(r'(?:public|private|protected)?\s*(?:static)?\s*(?:abstract)?\s*class\s+([A-Z][a-zA-Z0-9_]*)', context)
+        if class_match:
+            classes_set.add(class_match.group(1))
+            return  # If we found a class, don't look for methods
+        
+        # Extract interface names
+        interface_match = re.search(r'(?:public|private|protected)?\s*interface\s+([A-Z][a-zA-Z0-9_]*)', context)
+        if interface_match:
+            classes_set.add(interface_match.group(1))
+            return
+        
+        # Extract method names: public void methodName( or private String methodName(
+        # More comprehensive regex for Java methods
+        method_match = re.search(r'(?:public|private|protected)?\s*(?:static)?\s*(?:final)?\s*(?:\w+(?:<[^>]+>)?)\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*\(', context)
+        if method_match:
+            method_name = method_match.group(1)
+            # Exclude Java keywords that might be matched
+            if method_name not in ['class', 'interface', 'enum', 'extends', 'implements', 'throws']:
+                functions_set.add(method_name)
+
 def parse_diff(diff_text):
     """
-    Parses a git diff to extract changed functions and lines.
-    This is a heuristic parser.
+    Parses a git diff to extract changed files, classes, and functions separately.
+    Returns four lists: files, classes, functions, changed_lines
     """
+    changed_files = set()
+    changed_classes = set()
     changed_functions = set()
     changed_lines = []
     
-    # Regex to find function definitions in diff context or added lines
-    # This is simplified and might need adjustment based on actual diff format
-    # Looking for '@@ ... @@ def func' or similar
-    
     lines = diff_text.split('\n')
     current_file = None
+    current_language = None
     
     # Regex for hunk header: @@ -1,5 +1,5 @@ ...
     hunk_header_re = re.compile(r'^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@\s*(.*)')
@@ -25,28 +71,35 @@ def parse_diff(diff_text):
     current_line_num = 0
     
     for line in lines:
+        # Extract file path from diff header
         if line.startswith('diff --git'):
+            # Format: diff --git a/path/to/file.py b/path/to/file.py
+            match = re.search(r'b/(.+)$', line)
+            if match:
+                current_file = match.group(1)
+                changed_files.add(current_file)
+                current_language = detect_language(current_file)
             continue
         
+        # Also handle +++ b/file format
+        if line.startswith('+++') and line.startswith('+++ b/'):
+            file_path = line[6:].strip()
+            if file_path:
+                changed_files.add(file_path)
+                current_file = file_path
+                current_language = detect_language(current_file)
+            continue
+        
+        # Extract from hunk headers
         hunk_match = hunk_header_re.match(line)
         if hunk_match:
             current_line_num = int(hunk_match.group(1))
             context = hunk_match.group(2)
-            # Try to extract function name from context
-            # Python: def foo(...) or class Foo
-            # Java: public void foo(...)
-            if context:
-                # Simple extraction of the last word before ( or just the whole context
-                # Cleaning up context to get function name
-                func_match = re.search(r'(?:def|class|void|int|String|public|private|protected)\s+([a-zA-Z0-9_]+)', context)
-                if func_match:
-                    changed_functions.add(func_match.group(1))
-                else:
-                    # Fallback: just use the context text if it looks like code
-                    if '(' in context:
-                         changed_functions.add(context.strip())
+            # Extract class and function names from context
+            extract_entities(context, current_language, changed_classes, changed_functions)
             continue
 
+        # Track changed line numbers
         if line.startswith('+') and not line.startswith('+++'):
             changed_lines.append(current_line_num)
             current_line_num += 1
@@ -54,7 +107,7 @@ def parse_diff(diff_text):
             if not line.startswith('-'):
                 current_line_num += 1
                 
-    return list(changed_functions), changed_lines
+    return list(changed_files), list(changed_classes), list(changed_functions), changed_lines
 
 def get_repo_info(url):
     """Extracts owner and repo name from a GitHub URL."""
@@ -192,7 +245,7 @@ def process_language(lang_code, num_repos=3, min_issues=10):
         
         for issue in selected_issues:
             diff_text = issue.get('diff', '')
-            changed_funcs, changed_lines = parse_diff(diff_text)
+            changed_files, changed_classes, changed_funcs, changed_lines = parse_diff(diff_text)
             
             # Construct row
             row = {
@@ -204,7 +257,8 @@ def process_language(lang_code, num_repos=3, min_issues=10):
                 'Issue Title': issue.get('issue_title'),
                 'Issue Description': issue.get('issue_body'),
                 'Issue URL': issue.get('html_url') or issue.get('issue_url'),
-                'Changed Files': str(issue.get('changed_files')),
+                'Changed Files': str(changed_files),
+                'Changed Classes': str(changed_classes),
                 'Changed Functions': str(changed_funcs),
                 'Changed Lines': str(changed_lines)[:1000], # Truncate if too long
                 'Diff URL': issue.get('diff_url')

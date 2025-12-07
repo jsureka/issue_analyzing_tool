@@ -1,0 +1,66 @@
+﻿import sys
+import os
+import pandas as pd
+import ast
+import shutil
+import logging
+import subprocess
+from tqdm import tqdm
+import time
+import json
+
+# Setup paths
+current_dir = os.getcwd()
+insight_tool_path = os.path.join(current_dir, 'INSIGHT Tool')
+sys.path.append(insight_tool_path)
+
+# Configure logging
+log_file_path = os.path.join(current_dir, 'Replication Package', 'Evaluation', 'Bug Localization', 'evaluation_log.txt')
+logging.basicConfig(
+    level=logging.INFO, 
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler(log_file_path, mode='w'),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
+
+# Load .env
+from dotenv import load_dotenv
+load_dotenv(os.path.join(insight_tool_path, '.env'))
+
+try:
+    from Feature_Components.knowledgeBase import BugLocalization, IndexRepository, GetIndexStatus
+    from config import Config
+except ImportError as e:
+    logger.error(f'Failed to import required modules: {e}')
+    sys.exit(1)
+
+# Dataset and output paths
+DATASET_PATH = os.path.join(current_dir, 'Replication Package', 'Evaluation', 'test_dataset.xlsx')
+RESULTS_FILE = os.path.join(current_dir, 'Replication Package', 'Evaluation', 'Bug Localization', 'evaluation_results_bug_localization.xlsx')
+TEMP_REPO_DIR = os.path.join(current_dir, 'temp_repos')
+
+def clone_repo(repo_url, target_dir):
+    '''Clone a repository if it doesn't exist'''
+    if os.path.exists(target_dir):
+        try:
+            result = subprocess.run(['git', '-C', target_dir, 'status'], 
+                                  capture_output=True, check=True)
+            logger.info(f'Repository {repo_url} already exists at {target_dir}')
+            return True
+        except:
+            pass
+        logger.info(f'Removing existing directory {target_dir}')
+        shutil.rmtree(target_dir, ignore_errors=True)
+        
+    logger.info(f'Cloning {repo_url} to {target_dir}...')
+    try:
+        subprocess.run(['git', 'clone', repo_url, target_dir], check=True, capture_output=True)
+        return True
+    except subprocess.CalledProcessError as e:
+        logger.error(f'Failed to clone {repo_url}: {e}')
+        return False
+
+# Rest of file will be in Part 2
