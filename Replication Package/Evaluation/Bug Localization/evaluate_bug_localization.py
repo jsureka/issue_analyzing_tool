@@ -67,6 +67,86 @@ def clone_repo(repo_url, target_dir):
         logger.error(f"Failed to clone {repo_url}: {e}")
         return False
 
+        return False
+
+# --- Metrics Calculation Helper Functions ---
+
+def calculate_metrics_at_k(predictions, ground_truth, k_values):
+    metrics = {}
+    norm_gt = {os.path.normpath(f) for f in ground_truth}
+    
+    for k in k_values:
+        # Top-k predictions
+        top_k_preds = predictions[:k]
+        norm_preds = {os.path.normpath(f) for f in top_k_preds}
+        
+        # True Positives & Coverage
+        tp = 0
+        found_gt = set()
+        
+        for pred in norm_preds:
+            # Check against all GT items
+            for gt in norm_gt:
+                if gt.endswith(pred) or pred.endswith(gt):
+                    # It's a match
+                    found_gt.add(gt)
+                    # We only count this prediction as a TP once even if it matches multiple GTs (unlikely but possible with loose matching)
+                    # However, strictly TP usually counts distinct correct PREDICTIONS.
+                    # Let's keep TP as count of "correct predictions" for Precision calculation.
+            
+            # If this prediction matched ANY GT, it's a true positive
+            if any(gt.endswith(pred) or pred.endswith(gt) for gt in norm_gt):
+                tp += 1
+        
+        # Hit@k (Is at least one correct?)
+        hit = 1 if len(found_gt) > 0 else 0
+        
+        # Precision@k
+        # Corrected: Use actual number of predictions as denominator to avoid penalizing concise answers
+        denom = len(top_k_preds)
+        precision = tp / denom if denom > 0 else 0
+        
+        # Recall@k (Coverage of GT)
+        # Recall is defined as (Relevant Retrieved) / (Total Relevant)
+        # In this context, it should be len(found_gt) / len(norm_gt)
+        recall = len(found_gt) / len(norm_gt) if norm_gt else 0
+
+        # F1@k
+        f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0
+
+        # All Correct@k (Did we find ALL ground truth items?)
+        all_correct = 1 if (norm_gt and len(found_gt) == len(norm_gt)) else 0
+
+        # All Incorrect@k
+        all_incorrect = 1 if tp == 0 else 0
+        
+        metrics[f'Hit@{k}'] = hit
+        metrics[f'Precision@{k}'] = precision
+        metrics[f'Recall@{k}'] = recall
+        metrics[f'F1@{k}'] = f1
+        metrics[f'AllCorrect@{k}'] = all_correct
+        metrics[f'AllIncorrect@{k}'] = all_incorrect
+        metrics[f'AvgTP@{k}'] = tp
+    
+    return metrics
+
+def calculate_ap(predictions, ground_truth):
+    norm_gt = {os.path.normpath(f) for f in ground_truth}
+    hits = 0
+    sum_precisions = 0
+    
+    for i, pred in enumerate(predictions):
+        norm_pred = os.path.normpath(pred)
+        if any(gt.endswith(norm_pred) or norm_pred.endswith(gt) for gt in norm_gt):
+            hits += 1
+            precision_at_i = hits / (i + 1)
+            sum_precisions += precision_at_i
+            
+    if not norm_gt:
+        return 0.0
+    
+    return sum_precisions / len(norm_gt)
+
 def evaluate():
     if not os.path.exists(DATASET_PATH):
         logger.error(f"Dataset not found at {DATASET_PATH}")
@@ -79,8 +159,6 @@ def evaluate():
     
     # Group by repository to minimize cloning/indexing
     repos = df['Repository'].unique()
-    # Limit to 1 repo for testing as requested
-    repos = repos[:1]
     
     for repo_name in repos:
         repo_issues = df[df['Repository'] == repo_name]
@@ -148,127 +226,116 @@ def evaluate():
             
             duration = time.time() - start_time
             
-            # Extract Predictions (Top K only)
+            # Extract Predictions (Top K only) for logging and metrics
             pred_files = []
             pred_funcs = []
+            pred_classes = []
+            
+            seen_files = set()
+            seen_funcs = set()
+            seen_classes = set()
+
             if selected_funcs:
                 for res in selected_funcs[:Config.LLM_SELECTION_COUNT]:  
-                    pred_files.append(res['file_path'])
-                    pred_funcs.append(res['name'])
+                    # Files
+                    fpath = res['file_path']
+                    if fpath not in seen_files:
+                        pred_files.append(fpath)
+                        seen_files.add(fpath)
+
+                    # Functions
+                    fname = res['name']
+                    if fname not in seen_funcs:
+                        pred_funcs.append(fname)
+                        seen_funcs.add(fname)
+                    
+                    # Classes (from entity_type or class_name)
+                    cname = None
+                    if res.get('entity_type') == 'class':
+                        cname = res.get('name')
+                    elif res.get('class_name'):
+                        cname = res.get('class_name')
+                    
+                    if cname and cname not in seen_classes:
+                        pred_classes.append(cname)
+                        seen_classes.add(cname)
             
             # DEBUG: Print comparison
             logger.info(f"\n--- Issue: {issue_title} ---")
             logger.info(f"GT Files: {gt_files}")
             logger.info(f"Pred Files: {pred_files}")
             logger.info(f"GT Classes: {gt_classes}")
+            logger.info(f"Pred Classes: {pred_classes}")
             logger.info(f"GT Funcs: {gt_funcs}")
             logger.info(f"Pred Funcs: {pred_funcs}")
-            
-            # --- Metrics Calculation (LCA Benchmark) ---
-            
-            # Helper function for metrics at k
-            def calculate_metrics_at_k(predictions, ground_truth, k_values):
-                metrics = {}
-                norm_gt = {os.path.normpath(f) for f in ground_truth}
-                
-                for k in k_values:
-                    # Top-k predictions
-                    top_k_preds = predictions[:k]
-                    norm_preds = {os.path.normpath(f) for f in top_k_preds}
-                    
-                    # True Positives
-                    tp = 0
-                    for pred in norm_preds:
-                        if any(gt.endswith(pred) or pred.endswith(gt) for gt in norm_gt):
-                            tp += 1
-                    
-                    # Hit@k (Is at least one correct?)
-                    hit = 1 if tp > 0 else 0
-                    
-                    # Precision@k
-                    precision = tp / k if k > 0 else 0
-                    
-                    # Recall@k
-                    recall = tp / len(norm_gt) if norm_gt else 0
 
-                    # F1@k
-                    f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0
-
-                    # All Correct@k
-                    all_correct = 1 if (norm_gt and tp == len(norm_gt)) else 0
-
-                    # All Incorrect@k
-                    all_incorrect = 1 if tp == 0 else 0
-                    
-                    metrics[f'Hit@{k}'] = hit
-                    metrics[f'Precision@{k}'] = precision
-                    metrics[f'Recall@{k}'] = recall
-                    metrics[f'F1@{k}'] = f1
-                    metrics[f'AllCorrect@{k}'] = all_correct
-                    metrics[f'AllIncorrect@{k}'] = all_incorrect
-                    metrics[f'AvgTP@{k}'] = tp
-                
-                return metrics
-
-            # Helper for MAP (Mean Average Precision)
-            def calculate_ap(predictions, ground_truth):
-                norm_gt = {os.path.normpath(f) for f in ground_truth}
-                hits = 0
-                sum_precisions = 0
-                
-                for i, pred in enumerate(predictions):
-                    norm_pred = os.path.normpath(pred)
-                    if any(gt.endswith(norm_pred) or norm_pred.endswith(gt) for gt in norm_gt):
-                        hits += 1
-                        precision_at_i = hits / (i + 1)
-                        sum_precisions += precision_at_i
-                        
-                if not norm_gt:
-                    return 0.0
-                
-                return sum_precisions / len(norm_gt)
-
-            # Extract File Paths from Predictions
             # 1. Retrieval Stage (Candidates)
             retrieved_files = []
-            seen_files = set()
-            for cand in all_candidates:
-                fpath = cand['file_path']
-                if fpath not in seen_files:
-                    retrieved_files.append(fpath)
-                    seen_files.add(fpath)
+            seen_cand_files = set()
             
-            # 2. Final Stage (LLM Selection)
-            selected_files = []
-            seen_selected = set()
-            selected_funcs_names = []
-            seen_selected_funcs = set()
-            selected_class_names = []
-            seen_selected_classes = set()
+            # Debug sets for GT presence check
+            retrieved_classes = set()
+            retrieved_funcs = set()
 
-            for res in selected_funcs:
-                # Files
-                fpath = res['file_path']
-                if fpath not in seen_selected:
-                    selected_files.append(fpath)
-                    seen_selected.add(fpath)
+            for cand in all_candidates:
+                fpath = cand.get('file_path')
+                if fpath:
+                    if fpath not in seen_cand_files:
+                        retrieved_files.append(fpath)
+                        seen_cand_files.add(fpath)
                 
-                # Functions
-                fname = res['name']
-                if fname not in seen_selected_funcs:
-                    selected_funcs_names.append(fname)
-                    seen_selected_funcs.add(fname)
-                
-                # Classes (from entity_type or class_name)
-                cname = None
-                if res.get('entity_type') == 'class':
-                    cname = res.get('name')
-                elif res.get('class_name'):
-                    cname = res.get('class_name')
-                
-                if cname and cname not in seen_selected_classes:
-                    selected_class_names.append(cname)
-                    seen_selected_classes.add(cname)
+                # Collect Class/Func for debug
+                if cand.get('class_name'):
+                    retrieved_classes.add(cand['class_name'])
+                if cand.get('name'):
+                    retrieved_funcs.add(cand['name'])
+
+            # Debug: Check if GT is in Retrieved Candidates
+            logger.info(f"--- Retrieval Debug (Top-{Config.RETRIEVER_TOP_K}) ---")
+            
+            # Files
+            found_files = [f for f in gt_files if any(r.endswith(f) or f.endswith(r) for r in retrieved_files)]
+            missing_files = set(gt_files) - set(found_files) 
+            logger.info(f"GT Files Found in Retrieval: {len(found_files)}/{len(gt_files)} -> {found_files}")
+            if missing_files:
+                 logger.info(f"GT Files MISSING in Retrieval: {missing_files}")
+
+            # Classes
+            found_classes = [c for c in gt_classes if c in retrieved_classes]
+            logger.info(f"GT Classes Found in Retrieval: {len(found_classes)}/{len(gt_classes)} -> {found_classes}")
+
+            # Funcs
+            found_funcs = [f for f in gt_funcs if f in retrieved_funcs]
+            logger.info(f"GT Functions Found in Retrieval: {len(found_funcs)}/{len(gt_funcs)} -> {found_funcs}")
+
+            # --- Debug LLM Input Coverage ---
+            # Extract names from grouped_candidates (Result from localize)
+            # localize returns (final_ranked_list, initial_candidates), but 'grouped_candidates' is internal to localize.
+            # We can only infer LLM input coverage from 'final_ranked_list' IF we assume LLM didn't filter out too much?
+            # Actually, the user wants us to debug if GT is SENT to LLM.
+            # 'final_ranked_list' contains EVERYTHING that was sent to LLM (re-ranked).
+            # So checking final_ranked_list coverage tells us what the LLM had access to.
+            
+            llm_input_files = set()
+            llm_input_classes = set()
+            llm_input_funcs = set()
+            
+            for item in selected_funcs:
+                 fpath = item.get('file_path')
+                 if fpath: llm_input_files.add(fpath)
+                 if item.get('class_name'): llm_input_classes.add(item['class_name'])
+                 if item.get('name'): llm_input_funcs.add(item['name'])
+
+            logger.info(f"--- LLM Input Debug ---")
+            # Classes in LLM Input
+            input_classes = [c for c in gt_classes if c in llm_input_classes]
+            logger.info(f"GT Classes in LLM Input: {len(input_classes)}/{len(gt_classes)} -> {input_classes}")
+
+            # Assign to variables expected by metric calc
+            # but original code used selected_files, selected_funcs_names, selected_class_names)
+            selected_files = pred_files
+            selected_funcs_names = pred_funcs
+            selected_class_names = pred_classes
 
             # Calculate Metrics
             k_values = [1, 5, 10, 20, 30]

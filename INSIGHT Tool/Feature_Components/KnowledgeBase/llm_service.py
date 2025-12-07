@@ -232,91 +232,102 @@ Generate a concise solution plan.
 
 
     @retry_with_backoff
-    def select_functions(self, issue_title: str, issue_body: str, candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def select_functions(self, issue_title: str, issue_body: str, candidates: Any) -> List[Dict[str, Any]]:
         """
         Select the exact buggy code entities (classes/functions) from a list of candidates.
         
         Args:
             issue_title: Issue title
             issue_body: Issue body
-            candidates: List of candidate dicts
+            candidates: List of candidate dicts OR Dict with keys 'files', 'classes', 'functions'
             
         Returns:
             Tuple of (List of selected candidate dicts with 'reasoning' and 'entity_type', token_usage)
         """
         if not self.is_available() or not candidates:
-            return candidates[:1], {} # Fallback
+            return [], {} # Fallback
 
         try:
-            # DEBUG: Log input candidates breakdown
-            n_files = sum(1 for c in candidates if c.get('entity_type') == 'file')
-            n_classes = sum(1 for c in candidates if c.get('entity_type') == 'class')
-            n_funcs = sum(1 for c in candidates if c.get('entity_type') == 'function')
-            logger.info(f"LLM Input Candidates: {n_files} Files, {n_classes} Classes, {n_funcs} Functions")
+            # Handle input format
+            if isinstance(candidates, list):
+                # Legacy/Fallback mode
+                files = [c for c in candidates if c.get('entity_type') == 'file']
+                classes = [c for c in candidates if c.get('entity_type') == 'class']
+                funcs = [c for c in candidates if c.get('entity_type') == 'function']
+            else:
+                files = candidates.get('files', [])
+                classes = candidates.get('classes', [])
+                funcs = candidates.get('functions', [])
 
-            candidates_text = ""
-            for i, cand in enumerate(candidates):
-                # Optimize code token usage
+            logger.info(f"LLM Input Candidates: {len(files)} Files, {len(classes)} Classes, {len(funcs)} Functions")
+            
+            # Helper to format a single candidate
+            def format_cand(cand, idx, label):
                 raw_code = cand.get('code', '')
                 optimized_code = self._optimize_token_usage(raw_code)
-                
-                # Increase context to 1500 chars since we saved space
                 code_snippet = optimized_code[:1500] 
-                entity_type = cand.get('entity_type', 'function')
-                type_label = entity_type.upper()
-                class_info = f"Class: {cand.get('class_name')}\n" if cand.get('class_name') and entity_type == 'function' else ""
                 
-                # Add Graph Context if available
-                graph_context = ""
-                if cand.get('callers') or cand.get('callees'):
-                    graph_context = f"Graph Context:\n"
-                    if cand.get('callers'):
-                        graph_context += f"  - Called by: {', '.join(cand['callers'][:5])}\n"
-                    if cand.get('callees'):
-                        graph_context += f"  - Calls: {', '.join(cand['callees'][:5])}\n"
+                type_label = cand.get('entity_type', 'unknown').upper()
+                class_info = f"Class: {cand.get('class_name')}\n" if cand.get('class_name') and cand.get('entity_type') == 'function' else ""
                 
-                candidates_text += f"Candidate {i} (ID: {cand.get('id')}):\nType: {type_label}\nFile: {cand.get('file_path')}\n{class_info}Name: {cand.get('name')}\n{graph_context}Code/Content:\n```\n{code_snippet}\n```\n\n"
+                return f"[{label} Candidate {idx}] (ID: {cand.get('id')}):\nType: {type_label}\nFile: {cand.get('file_path')}\n{class_info}Name: {cand.get('name')}\nCode:\n```\n{code_snippet}\n```\n\n"
+
+            # Build Prompt Sections
+            files_text = "\n".join([format_cand(c, i, "FILE") for i, c in enumerate(files)])
+            classes_text = "\n".join([format_cand(c, i, "CLASS") for i, c in enumerate(classes)])
+            funcs_text = "\n".join([format_cand(c, i, "FUNC") for i, c in enumerate(funcs)])
 
             prompt = ChatPromptTemplate.from_messages([
                 ("system", f"""You are an expert software engineer debugging a complex system.
 Your task is to identify the **ROOT CAUSE** code entities (files, classes, or functions) that need to be modified to fix the bug.
 
 **CRITICAL INSTRUCTIONS**:
-1.  **Analyze Candidates**: You are provided with mixed candidates (FILES, CLASSES, FUNCTIONS). Analyze them based on the Issue Description.
-2.  **Select Granularly**:
-    *   If a specific **FUNCTION** contains the bug logic, select the FUNCTION.
-    *   If the bug involves shared state or multiple methods in a class, selecting the **CLASS** is acceptable.
-    *   If the issue implies a missing file or broad architectural issue in a file, selecting the **FILE** is acceptable.
-    *   **Prioritize Specificity**: Prefer Functions > Classes > Files.
-3.  **Entity Type Awareness**: Explicitly state the `entity_type` ("function", "class", "file") for your selection.
-4.  **Multi-Selection**: You MUST select EXACTLY {Config.LLM_SELECTION_COUNT} most likely entities. Rank them from most likely to least likely.
+1.  **Analyze Granularly**: You are provided with candidates grouped by type (Files, Classes, Functions).
+2.  **Separate Predictions**:
+    *   **Files**: Select files that are entirely missing, irrelevant, or need broad architectural changes.
+    *   **Classes**: Select classes that have state/logic issues spanning multiple methods.
+    *   **Functions**: Select specific functions where the bug logic resides.
+3.  **Consistency**: If you select a Function, you imply its Class/File is relevant. You do NOT need to re-select the file unless the file *itself* has a separate issue.
+4.  **Priorities**: detailed function fixes are usually preferred over broad file selections.
 
-Return a JSON object with a single key "selected_entities" containing a list of objects.
-Each object must have:
-- "id": The candidate ID from the provided list.
-- "entity_type": "function", "class", or "file".
-- "reasoning": Brief explanation of why this entity is the root cause.
+Return a JSON object with three keys: "selected_files", "selected_classes", "selected_functions". Default to empty lists if none apply for a category.
+Each item in the lists must have:
+- "id": The candidate ID.
+- "reasoning": Brief explanation.
 
-Example: {{{{ "selected_entities": [ {{{{ "id": "func_1", "entity_type": "function", "reasoning": "Loop condition error at line 5" }}}}, {{{{ "id": "class_2", "entity_type": "class", "reasoning": "Incorrect state management in this class" }}}} ] }}}}"""),
+Example:
+{{{{
+  "selected_files": [ {{{{ "id": "file_1", "reasoning": "Missing config" }}}} ],
+  "selected_classes": [],
+  "selected_functions": [ {{{{ "id": "func_a", "reasoning": "Off-by-one error" }}}} ]
+}}}}"""),
                 ("human", """Issue: {title}
 Description: {body}
 
-Candidate Functions:
-{candidates_text}
+=== CANDIDATE FILES ===
+{files_text}
 
-Select the top {count} buggy entity/entities:""")
+=== CANDIDATE CLASSES ===
+{classes_text}
+
+=== CANDIDATE FUNCTIONS ===
+{funcs_text}
+
+Select the buggy entities.""")
             ])
             
             chain = prompt | self.llm
             response = chain.invoke({
                 "title": issue_title,
                 "body": issue_body,
-                "candidates_text": candidates_text,
-                "count": Config.LLM_SELECTION_COUNT
+                "files_text": files_text,
+                "classes_text": classes_text,
+                "funcs_text": funcs_text
             })
             
             content = response.content
             logger.info(f"Raw LLM Response: {content}")
+            
             # Cleanup markdown
             if "```json" in content:
                 content = content.split("```json")[1].split("```")[0]
@@ -325,21 +336,32 @@ Select the top {count} buggy entity/entities:""")
                 
             import json
             result = json.loads(content)
-            selected_items = result.get("selected_entities", [])
             
             selected_candidates = []
-            for item in selected_items[:Config.LLM_SELECTION_COUNT]:
-                cand_id = item.get('id')
-                if not cand_id: continue
-                
-                # Find original candidate
-                orig_cand = next((c for c in candidates if c.get('id') == cand_id), None)
-                
-                if orig_cand:
-                    new_cand = orig_cand.copy()
-                    new_cand['llm_reasoning'] = item.get('reasoning')
-                    new_cand['entity_type'] = item.get('entity_type', orig_cand.get('entity_type', 'function'))
-                    selected_candidates.append(new_cand)
+            
+            # Helper to map back
+            all_source_map = {c['id']: c for c in files + classes + funcs}
+            
+            # Aggregate in priority order: Functions > Classes > Files
+            for category in ["selected_functions", "selected_classes", "selected_files"]:
+                items = result.get(category, [])
+                for item in items:
+                    cand_id = item.get('id')
+                    if not cand_id: continue
+                    
+                    orig_cand = all_source_map.get(cand_id)
+                    if orig_cand:
+                        new_cand = orig_cand.copy()
+                        new_cand['llm_reasoning'] = item.get('reasoning')
+                        # Ensure entity type is correct based on category bucket? 
+                        # Or trust original. Trust original.
+                        selected_candidates.append(new_cand)
+
+            # Limit total selection count? Or just return all relevant.
+            # config.LLM_SELECTION_COUNT applies to total items usually.
+            
+            # Sort by priority? The prompt asked for granular. 
+            # We just return the list; the caller sorts/ranks.
             
             # Extract token usage
             token_usage = {}
@@ -352,56 +374,104 @@ Select the top {count} buggy entity/entities:""")
             if "429" in str(e) or "quota" in str(e).lower() or "rate limit" in str(e).lower():
                 raise
             logger.error(f"Error selecting functions: {e}")
-            return candidates[:1], {} # Fallback
+            # Fallback
+            flat_candidates = (files if 'files' in locals() else []) + (classes if 'classes' in locals() else []) + (funcs if 'funcs' in locals() else [])
+            return flat_candidates[:1], {} 
 
     @retry_with_backoff
-    def generate_search_query(self, issue_title: str, issue_body: str) -> str:
+    def generate_search_query(self, issue_title: str, issue_body: str) -> Dict[str, Any]:
         """
-        Generate a concise search query from the issue description.
-        
-        Args:
-            issue_title: Issue title
-            issue_body: Issue body
-            
-        Returns:
-            Generated search query string
+        Generate a search query and determines if the issue is related to test files.
         """
         if not self.is_available():
-            return f"{issue_title} {issue_body}"[:512] # Fallback to raw text
+            return {"query": f"{issue_title} {issue_body}"[:200], "is_test_related": True}
 
         try:
             prompt = ChatPromptTemplate.from_messages([
-                ("system", """You are an expert developer assisting with bug localization.
-Your task is to generate a **concise, semantic search query** that will be used to retrieve relevant code functions from a vector database.
+                ("system", """You are an expert developer.
+Target:
+1. Generate a concise search query (5-10 keywords) to find the relevant code.
+2. **Predict specific Class Names** or File Names that are likely to be relevant based on the issue description.
+3. Determine if the issue is strictly about fixing **TEST code**.
 
-**Instructions**:
-1.  Analyze the issue title and body to understand the core technical problem.
-2.  Identify key concepts, specific class/function names mentioned, and the type of logic involved.
-3.  Formulate a query that captures these elements.
-4.  **Do NOT** include generic terms like "bug", "issue", "fix", or "error". Focus on the *code* concepts.
-5.  **Do NOT** return JSON. Return ONLY the query string.
-
-Example Issue: "AttributeError: 'NoneType' object has no attribute 'get' in process_data"
-Example Query: process_data function AttributeError NoneType get method data processing logic"""),
-                ("human", """Issue: {title}
-Description: {body}
-
-Generate the search query:""")
+Return a JSON object:
+{{
+  "query": "class_name function_name key_terms",
+  "potential_class_names": "ClassA ClassB FileC",
+  "is_test_related": boolean
+}}
+"""),
+                ("human", "Issue: {title}\nDescription: {body}\n\nOutput JSON:")
             ])
             
             chain = prompt | self.llm
-            response = chain.invoke({
-                "title": issue_title,
-                "body": issue_body
-            })
+            response = chain.invoke({"title": issue_title, "body": issue_body})
             
-            query = response.content.strip()
-            # Remove quotes if present
-            if query.startswith('"') and query.endswith('"'):
-                query = query[1:-1]
+            content = response.content.strip()
+            if "```json" in content:
+                content = content.split("```json")[1].split("```")[0]
+            elif "```" in content:
+                content = content.split("```")[1].split("```")[0]
             
-            return query
+            import json
+            result = json.loads(content)
+            
+            base_query = result.get("query", f"{issue_title}")
+            class_names = result.get("potential_class_names", "")
+            
+            # Enrich query with class names if available
+            final_query = f"{base_query} {class_names}".strip()
+            
+            return {
+                "query": final_query,
+                "is_test_related": result.get("is_test_related", False)
+            }
 
         except Exception as e:
             logger.error(f"Error generating search query: {e}")
-            return f"{issue_title} {issue_body}"[:512] # Fallback
+            return {"query": f"{issue_title}", "is_test_related": True}
+
+    @retry_with_backoff
+    def generate_candidate_analysis(self, issue_title: str, issue_body: str, candidates: List[Dict[str, Any]]) -> str:
+        """
+        Generate a technical analysis for the selected candidates.
+        Used as a fallback when granular reasoning is unavailable.
+        """
+        if not self.is_available() or not candidates:
+            return "Analysis unavailable."
+
+        try:
+            # Format candidates
+            candidates_text = ""
+            for i, cand in enumerate(candidates, 1):
+                name = cand.get('name', 'Unknown')
+                path = cand.get('file_path', 'Unknown')
+                code = self._optimize_token_usage(cand.get('code', ''))[:1000]
+                candidates_text += f"Candidate {i}: {name} in {path}\nCode:\n{code}\n\n"
+
+            prompt = ChatPromptTemplate.from_messages([
+                ("system", """You are an expert developer.
+Analyze the provided candidate functions in relation to the reported issue.
+Provide a brief Technical Analysis explaining why these functions are relevant and how they might be contributing to the bug.
+Do not just list them. Synthesize an explanation.
+"""),
+                ("human", """Issue: {title}
+Description: {body}
+
+{candidates_text}
+
+Provide a concise technical analysis (2-3 paragraphs).""")
+            ])
+
+            chain = prompt | self.llm
+            response = chain.invoke({
+                "title": issue_title,
+                "body": issue_body,
+                "candidates_text": candidates_text
+            })
+            
+            return response.content
+
+        except Exception as e:
+            logger.error(f"Error generating candidate analysis: {e}")
+            return "Technical analysis generation failed."

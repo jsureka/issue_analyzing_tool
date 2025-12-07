@@ -622,3 +622,62 @@ class GraphStore:
         except Exception as e:
             logger.error(f"Failed to get context subgraph: {e}")
             return "Error retrieving graph context"
+
+    def get_node_context(self, entity_ids: List[str]) -> Dict[str, Any]:
+        """
+        Get parent context (Class/File) for a list of entities.
+        
+        Args:
+            entity_ids: List of entity IDs (functions or classes)
+            
+        Returns:
+            Dict mapping e.g. 'func_id' -> {'parent_class': {...}, 'parent_file': {...}}
+        """
+        self._ensure_connected()
+        
+        context_map = {}
+        try:
+            with self.driver.session() as session:
+                # 1. Unknown entities (might be functions or classes) catch-all query or separate?
+                # We'll assume they are Functions or Classes.
+                
+                query = """
+                MATCH (n)
+                WHERE n.id IN $entity_ids
+                
+                OPTIONAL MATCH (n)<-[:CONTAINS]-(parent_class:Class)
+                
+                // Get File (could be direct parent of n, or parent of parent_class)
+                OPTIONAL MATCH (n)<-[:CONTAINS*1..2]-(file:File)
+                
+                RETURN n.id as id, labels(n) as labels,
+                       parent_class, file
+                """
+                
+                result = session.run(query, entity_ids=entity_ids)
+                
+                for record in result:
+                    entity_id = record['id']
+                    labels = record['labels']
+                    parent_class_node = record['parent_class']
+                    file_node = record['file']
+                    
+                    details = {}
+                    
+                    if parent_class_node:
+                        p_class = dict(parent_class_node)
+                        if 'id' not in p_class: p_class['id'] = parent_class_node.element_id
+                        details['parent_class'] = p_class
+                        
+                    if file_node:
+                        p_file = dict(file_node)
+                        if 'id' not in p_file: p_file['id'] = file_node.element_id
+                        details['parent_file'] = p_file
+                    
+                    context_map[entity_id] = details
+                    
+            return context_map
+
+        except Exception as e:
+            logger.error(f"Failed to get node context: {e}")
+            return {}
