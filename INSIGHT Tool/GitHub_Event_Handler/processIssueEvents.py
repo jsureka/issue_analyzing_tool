@@ -5,7 +5,7 @@ import subprocess
 import tempfile
 from config import Config as config
 from .getCodeFiles import fetch_all_code_files
-from .createCommentBugLocalization import CreateCommentBL, BLStartingCommentForWaiting, CreateErrorComment
+from .createCommentBugLocalization import CreateCommentBL, BLStartingCommentForWaiting, CreateErrorComment, CreateIndexingInProgressComment
 from .app_authentication import authenticate_github_app
 from Feature_Components.knowledgeBase import BugLocalization as KBBugLocalization, GetIndexStatus
 from Feature_Components.KnowledgeBase.telemetry import get_telemetry_logger
@@ -30,14 +30,15 @@ def process_issue_event(repo_full_name, input_issue, action):
 
             # Bug localization using Knowledge Base System
             if paths_only:
-                BLStartingCommentForWaiting(repo_full_name, input_issue['issue_number'])
-                
-                # Check if repository is indexed
                 repo_owner, repo_name = repo_full_name.split('/')
                 index_status = GetIndexStatus(repo_full_name)
                 
                 if index_status.get('indexed', False):
+                    # Repository is indexed, proceed with analysis
+                    BLStartingCommentForWaiting(repo_full_name, input_issue['issue_number'])
+                    
                     # Use Knowledge Base system
+
                     # Sync repository to ensure files are present for snippet extraction
                     from .repository_sync import RepositorySync
                     
@@ -139,6 +140,7 @@ def process_issue_event(repo_full_name, input_issue, action):
                 else:
                     # Repository not indexed, return message
                     logger.info(f"Repository {repo_full_name} is not indexed. Skipping bug localization.")
+                    CreateIndexingInProgressComment(repo_full_name, input_issue['issue_number'])
                     buggy_code_files_list = []
                 
                 if buggy_code_files_list:

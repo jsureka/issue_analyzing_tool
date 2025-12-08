@@ -159,3 +159,36 @@ def CreateErrorComment(repo_full_name, issue_number, error_message):
             print(f"Failed to create error comment: {response.text}")
     except Exception as e:
         print(f"Exception while posting error comment: {e}")
+
+def CreateIndexingInProgressComment(repo_full_name, issue_number):
+    """
+    Post a comment stating that the repository is being indexed.
+    """
+    url = f'https://api.github.com/repos/{repo_full_name}/issues/{issue_number}/comments'
+    auth_token = authenticate_github_app(repo_full_name)
+
+    headers = {
+        'Authorization': f'token {auth_token}',
+        'Accept': 'application/vnd.github.v3+json'
+    }
+
+    comment_body = (
+        "## 🔄 **Indexing In Progress**\n\n"
+        "**INSIGHT** is currently indexing this repository to build its Knowledge Base. "
+        "This is a one-time process that may take a few minutes depending on the repository size.\n\n"
+        "Bug localization analysis will be available for future issues once indexing is complete."
+    )
+
+    payload = {
+        'body': comment_body
+    }
+
+    try:
+        response = requests.post(url, headers=headers, json=payload)
+        response.raise_for_status()
+        if response.status_code == 201:
+            print("Indexing In Progress comment created successfully.")
+        else:
+            print(f"Failed to create Indexing comment: {response.text}")
+    except Exception as e:
+        print(f"Exception while posting Indexing comment: {e}")
