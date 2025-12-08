@@ -182,25 +182,24 @@ def BugLocalization(issue_title: str, issue_body: str, repo_owner: str,
         }
 
 
+from config import Config
+
 def IndexRepository(repo_path: str, repo_name: str, 
                    model_name: str = "microsoft/unixcoder-base",
-                   neo4j_uri: str = "bolt://localhost:7687",
-                   neo4j_user: str = "neo4j",
-                   neo4j_password: str = "password") -> Dict[str, Any]:
+                   neo4j_uri: str = None,
+                   neo4j_user: str = None,
+                   neo4j_password: str = None) -> Dict[str, Any]:
     """
     Index a repository for bug localization
-    
-    Args:
-        repo_path: Path to repository root
-        repo_name: Repository name (e.g., "owner/repo")
-        model_name: Embedding model name
-        neo4j_uri: Neo4j connection URI
-        neo4j_user: Neo4j username
-        neo4j_password: Neo4j password
-        
-    Returns:
-        Dictionary with indexing results and statistics
     """
+    # Use Config defaults if not provided
+    if neo4j_uri is None:
+        neo4j_uri = Config.NEO4J_URI
+    if neo4j_user is None:
+        neo4j_user = Config.NEO4J_USER
+    if neo4j_password is None:
+        neo4j_password = Config.NEO4J_PASSWORD
+
     try:
         logger.info(f"Starting indexing for repository: {repo_name}")
         
@@ -242,15 +241,14 @@ def IndexRepository(repo_path: str, repo_name: str,
 def GetIndexStatus(repo_name: str) -> Dict[str, Any]:
     """
     Check if a repository is indexed
-    
-    Args:
-        repo_name: Repository name (e.g., "owner/repo")
-        
-    Returns:
-        Dictionary with index status
     """
     try:
-        indexer = RepositoryIndexer()
+        # Use Config defaults so it connects to correct Neo4j instance
+        indexer = RepositoryIndexer(
+            neo4j_uri=Config.NEO4J_URI,
+            neo4j_user=Config.NEO4J_USER,
+            neo4j_password=Config.NEO4J_PASSWORD
+        )
         status = indexer.get_index_status(repo_name)
         
         if status is None:

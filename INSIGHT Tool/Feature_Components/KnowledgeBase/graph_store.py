@@ -11,25 +11,27 @@ from neo4j.exceptions import ServiceUnavailable, AuthError
 logger = logging.getLogger(__name__)
 
 
+from config import Config
+
 class GraphStore:
     """Neo4j graph database manager for code knowledge graph"""
     
-    def __init__(self, uri: str = "bolt://localhost:7687", 
-                 user: str = "neo4j", password: str = "password"):
+    def __init__(self, uri: str = None, 
+                 user: str = None, password: str = None):
         """
         Initialize Neo4j connection
         
         Args:
-            uri: Neo4j connection URI
-            user: Database username
-            password: Database password
+            uri: Neo4j connection URI (default: Config.NEO4J_URI)
+            user: Database username (default: Config.NEO4J_USER)
+            password: Database password (default: Config.NEO4J_PASSWORD)
         """
-        self.uri = uri
-        self.user = user
-        self.password = password
+        self.uri = uri or Config.NEO4J_URI
+        self.user = user or Config.NEO4J_USER
+        self.password = password or Config.NEO4J_PASSWORD
         self.driver: Optional[Driver] = None
         
-        logger.info(f"GraphStore initialized with URI: {uri}")
+        logger.info(f"GraphStore initialized with URI: {self.uri}")
     
     def connect(self) -> bool:
         """
