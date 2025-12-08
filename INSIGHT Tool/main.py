@@ -24,13 +24,6 @@ logger = logging.getLogger(__name__)
 # ThreadPool for concurrent webhook processing
 executor = ThreadPoolExecutor(max_workers=app.config['MAX_WORKERS'])
 
-
-@app.before_request
-def log_request_info():
-    app.logger.info(f"Headers: {request.headers}")
-    app.logger.info(f"Body: {request.get_data()}")
-
-
 @app.route('/', methods=['GET'])
 def homepage():
     """
