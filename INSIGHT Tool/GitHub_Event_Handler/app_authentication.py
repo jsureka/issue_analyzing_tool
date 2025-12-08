@@ -12,11 +12,29 @@ def generate_jwt():
     try:
         iat = int(time.time())
         exp = iat + 60 * 9
-        iss = os.environ.get('GITHUB_APP_ID')
+        if 'GITHUB_APP_ID' in os.environ:
+            iss = os.environ['GITHUB_APP_ID']
+        elif 'APP_ID' in os.environ:
+            iss = os.environ['APP_ID']
+        else:
+             raise ValueError("GITHUB_APP_ID or APP_ID is not set in the .env file.")
 
         private_key_str = os.environ.get('GITHUB_PRIVATE_KEY')
+        private_key_base64 = os.environ.get('GITHUB_PRIVATE_KEY_BASE64')
+
+        if private_key_base64:
+             import base64
+             private_key_str = base64.b64decode(private_key_base64).decode('utf-8')
+
         if not private_key_str:
-            raise ValueError("GITHUB_PRIVATE_KEY is not set in the .env file.")
+            # Fallback to file if path is specified (legacy support)
+            private_key_path = os.environ.get('PRIVATE_KEY_PATH')
+            if private_key_path and os.path.exists(private_key_path):
+                 with open(private_key_path, 'r') as f:
+                     private_key_str = f.read()
+
+        if not private_key_str:
+            raise ValueError("GITHUB_PRIVATE_KEY, GITHUB_PRIVATE_KEY_BASE64, or valid PRIVATE_KEY_PATH is not set.")
 
         private_key = serialization.load_pem_private_key(
             private_key_str.encode('utf-8'),

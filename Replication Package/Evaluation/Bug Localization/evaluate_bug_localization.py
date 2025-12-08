@@ -312,14 +312,6 @@ def evaluate():
             found_funcs = [f for f in gt_funcs if f in retrieved_funcs]
             logger.info(f"GT Functions Found in Retrieval: {len(found_funcs)}/{len(gt_funcs)} -> {found_funcs}")
 
-            # --- Debug LLM Input Coverage ---
-            # Extract names from grouped_candidates (Result from localize)
-            # localize returns (final_ranked_list, initial_candidates), but 'grouped_candidates' is internal to localize.
-            # We can only infer LLM input coverage from 'final_ranked_list' IF we assume LLM didn't filter out too much?
-            # Actually, the user wants us to debug if GT is SENT to LLM.
-            # 'final_ranked_list' contains EVERYTHING that was sent to LLM (re-ranked).
-            # So checking final_ranked_list coverage tells us what the LLM had access to.
-            
             llm_input_files = set()
             llm_input_classes = set()
             llm_input_funcs = set()
@@ -363,10 +355,6 @@ def evaluate():
             # LLM Metrics (Function/Class Combined) - k=[1, 3, 5, 10]
             gt_func_class = list(set(gt_classes + gt_funcs))
             pred_func_class = []
-            # Merge predictions similarly, preserving order preference (Funcs then Classes or vice versa, or interleaved?)
-            # Here we just append lists, simple union. 
-            # Note: A function and class could theoretically share a name, but context usually disambiguates.
-            # Using simple list concatenation for now.
             pred_func_class = selected_funcs_names + selected_class_names
             
             llm_func_class_metrics = calculate_metrics_at_k(pred_func_class, gt_func_class, [1, 3, 5, 10])
