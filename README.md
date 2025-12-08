@@ -18,9 +18,9 @@ INSIGHT is a GitHub application that automatically localizes bugs in software re
 
 1. **Issue Received**: GitHub webhook triggers when an issue is opened
 2. **Query Generation**: LLM creates an optimized search query
-3. **Dense Retrieval**: Retrieves top-20 candidate functions using semantic search
+3. **Dense Retrieval**: Retrieves top-20 candidate entities (Files, Classes, Functions) using semantic search
 4. **Graph Enrichment**: Adds caller/callee context from code knowledge graph
-5. **LLM Selection**: Selects top-5 most likely buggy functions
+5. **LLM Selection**: Selects top-5 most likely buggy entities
 6. **Analysis & Patch**: LLM explains the bug and suggests a fix
 7. **Comment Posted**: Analysis posted as a GitHub comment
 

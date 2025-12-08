@@ -45,7 +45,7 @@ INSIGHT (Issue Analyzing Tool) is a GitHub application that provides automated b
 │       │  3. Graph Enrichment          │                  │
 │       │     (Neo4j: callers/callees)  │                  │
 │       │  4. LLM Selection             │                  │
-│       │     (Top 5 functions)         │                  │
+│       │     (Top 5 entities)          │                  │
 │       │  5. Generate Analysis &Patch  │                  │
 │       │     (LLM)                     │                  │
 │       └───────────────────────────────┘                  │
@@ -62,15 +62,15 @@ The core RAG retrieval pipeline for candidate identification:
 
 1. **Issue Processing**: Preprocesses issue title and body
 2. **Query Generation**: LLM generates semantic search query from issue
-3. **Dense Retrieval**: Retrieves top-20 candidate functions using UnixCoder embeddings
-4. **Graph Enrichment**: Adds callers/callees context from Neo4j and reads code snippets
-5. **LLM Selection**: GPT-4o/Gemini selects top-5 most likely buggy functions with reasoning
-6. **Return**: Returns ranked list of candidates (top-3 selected functions + remaining candidates)
+3. **Dense Retrieval**: Retrieves top-k candidate entities (Files, Classes, and Functions) using UnixCoder embeddings
+4. **Graph Enrichment**: Adds callers/callees context from Neo4j and consistently ensures parent context (e.g., File for a Function)
+5. **LLM Selection**: GPT-4o/Gemini selects top-n most likely buggy entities with reasoning
+6. **Return**: Returns ranked list of candidates (top-selected entities + remaining candidates)
 
 ### 2. Knowledge Base Components
 
 #### Vector Store (`retriever.py` + FAISS)
-- Stores embeddings of all functions in the repository
+- Stores embeddings of all Files, Classes, and Functions in the repository
 - Uses Microsoft's UnixCoder model
 - Enables semantic similarity search
 
@@ -88,7 +88,7 @@ The core RAG retrieval pipeline for candidate identification:
 ### 3. LLM Service (`llm_service.py`)
 Provides LLM capabilities:
 - **Query Generation**: Creates optimized search queries
-- **Function Selection**: Identifies root cause functions
+- **Function Selection**: Identifies root cause entities (Files, Classes, Functions)
 - **Analysis**: Explains the bug
 - **Patch Generation**: Suggests fixes
 
@@ -108,7 +108,7 @@ LangGraph-based orchestration (main flow for GitHub app):
 
 ### Indexing Phase
 ```
-Repository → Parse (tree-sitter) → Extract Functions →
+Repository → Parse (tree-sitter) → Extract Files, Classes, Functions →
   ├─ Generate Embeddings (UnixCoder) → FAISS
   └─ Build Graph (relationships) → Neo4j
 ```
@@ -155,6 +155,6 @@ On the [LCA Bug Localization benchmark](https://huggingface.co/datasets/JetBrain
 ## Storage
 
 - **SQLite**: Repository metadata, indexing status
-- **FAISS**: Function embeddings (one index per repository)
+- **FAISS**: Embeddings for Files, Classes, and Functions (one index per repository)
 - **Neo4j**: Code knowledge graph (shared across repositories)
 - **Local Files**: Cloned repositories (temporary)

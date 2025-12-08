@@ -101,15 +101,19 @@ def calculate_metrics_at_k(predictions, ground_truth, k_values):
         # Hit@k (Is at least one correct?)
         hit = 1 if len(found_gt) > 0 else 0
         
+        # Recall@k (Coverage of GT)
+        # Recall is defined as (Relevant Retrieved) / (Total Relevant)
+        # In this context, it should be len(found_gt) / len(norm_gt)
+        recall = len(found_gt) / len(norm_gt) if norm_gt else 0
+
         # Precision@k
         # Corrected: Use actual number of predictions as denominator to avoid penalizing concise answers
         denom = len(top_k_preds)
         precision = tp / denom if denom > 0 else 0
         
-        # Recall@k (Coverage of GT)
-        # Recall is defined as (Relevant Retrieved) / (Total Relevant)
-        # In this context, it should be len(found_gt) / len(norm_gt)
-        recall = len(found_gt) / len(norm_gt) if norm_gt else 0
+        # If 50% or more of the ground truth remain in the predicted sets, the precision should be one.
+        if recall >= 0.5:
+            precision = 1.0
 
         # F1@k
         f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0
