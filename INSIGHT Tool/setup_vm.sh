@@ -37,7 +37,6 @@ echo "Creating data directories..."
 mkdir -p Data_Storage/Repositories indices models neo4j_data
 
 # Set permissions for data directories
-# 777 is used here to ensure the container user (which might differ) can write
 chmod -R 777 Data_Storage indices models neo4j_data
 
 # 4. Environment Configuration
@@ -82,7 +81,8 @@ OPENAI_API_KEY=$openai_key
 GITHUB_PRIVATE_KEY_BASE64=$key_base64
 FLASK_ENV=production
 FLASK_DEBUG=False
-PORT=5000
+# Port to run on (Host machine)
+PORT=80
 POOL_PROCESSOR_MAX_WORKERS=4
 # Model paths
 BUGLOCALIZATION_MODEL_PATH=microsoft/unixcoder-base
@@ -91,39 +91,32 @@ NEO4J_URI=bolt://neo4j:7687
 NEO4J_USER=neo4j
 NEO4J_PASSWORD=password
 EOF
-    echo ".env file created with Base64 encoded private key."
+    echo ".env file created."
 else
     echo ".env file already exists. Skipping creation."
-    echo "Ensure GITHUB_PRIVATE_KEY_BASE64 or PRIVATE_KEY_PATH is set in it."
+    
+    # Ensure PORT is set to 80 if not present
+    if ! grep -q "^PORT=" .env; then
+        echo "PORT=80" >> .env
+        echo "Added PORT=80 to .env"
+    fi
 fi
 
 # 5. Deploy with Docker Compose
 echo "--------------------------------------------------"
 echo "Building and Starting Application..."
 
-# Create production override if missing
-if [ ! -f docker-compose.prod.yml ]; then
-    cat > docker-compose.prod.yml <<EOF
-version: '3.8'
-services:
-  insight-tool:
-    ports:
-      - "80:5000"
-    restart: always
-    env_file:
-      - .env
-EOF
-fi
+# Remove old convenience override if it somehow survived (though we deleted it locally)
+rm -f docker-compose.prod.yml
 
-# Run Docker Compose
-# We verify if we need to install the compose plugin specifically or if it's part of docker
+# Check/Install Compose Plugin
 if ! docker compose version &> /dev/null; then
   echo "Installing Docker Compose Plugin..."
   apt-get install -y docker-compose-plugin
 fi
 
-docker compose -f docker-compose.yml -f docker-compose.prod.yml down --remove-orphans || true
-docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+docker compose down --remove-orphans || true
+docker compose up -d --build
 
 # 6. Verification
 echo "--------------------------------------------------"
@@ -137,5 +130,5 @@ echo "- Neo4j: Running in container 'neo4j' (Port 7474 for UI)"
 echo "- FAISS: Embedded (Indices stored in ./indices)"
 echo ""
 echo "Useful Commands:"
-echo "  View Logs: docker compose -f docker-compose.yml -f docker-compose.prod.yml logs -f"
-echo "  Stop App:  docker compose -f docker-compose.yml -f docker-compose.prod.yml down"
+echo "  View Logs: docker compose logs -f"
+echo "  Stop App:  docker compose down"
