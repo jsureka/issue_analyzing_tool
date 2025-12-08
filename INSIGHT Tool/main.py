@@ -136,7 +136,7 @@ def api_git_msg():
 
 
 if __name__ == '__main__':
-    app.run(debug=app.config['DEBUG'], port=app.config['PORT'])
+    app.run(host='0.0.0.0', debug=app.config['DEBUG'], port=app.config['PORT'])
 
 
 # https://github.com/apps/sprint-issue-report-assistant
