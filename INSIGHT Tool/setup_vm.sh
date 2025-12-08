@@ -34,10 +34,10 @@ systemctl enable docker
 
 # 3. Create required directories
 echo "Creating data directories..."
-mkdir -p Data_Storage/Repositories indices models neo4j_data
+mkdir -p Data_Storage/Repositories indices models
 
 # Set permissions for data directories
-chmod -R 777 Data_Storage indices models neo4j_data
+chmod -R 777 Data_Storage indices models
 
 # 4. Environment Configuration
 echo "--------------------------------------------------"
@@ -106,8 +106,7 @@ fi
 echo "--------------------------------------------------"
 echo "Building and Starting Application..."
 
-# Remove old convenience override if it somehow survived (though we deleted it locally)
-rm -f docker-compose.prod.yml
+
 
 # Check/Install Compose Plugin
 if ! docker compose version &> /dev/null; then
