@@ -74,3 +74,4 @@ langchain-community==0.3.7
 langchain-core>=0.3.17
 langchain-google-genai
 langgraph==0.2.45
+langchain_openai

@@ -48,6 +48,8 @@ if [ ! -f .env ]; then
     
     read -p "GitHub App ID: " app_id
     read -p "Webhook Secret: " webhook_secret
+    read -p "LLM Model Name (default: gpt-4o): " llm_model_name
+    llm_model_name=${llm_model_name:-gpt-4o}
     read -p "Gemini API Key (optional): " gemini_key
     read -p "OpenAI API Key (optional): " openai_key
     
@@ -76,6 +78,7 @@ if [ ! -f .env ]; then
 GITHUB_APP_ID=$app_id
 APP_ID=$app_id
 WEBHOOK_SECRET=$webhook_secret
+LLM_MODEL_NAME=$llm_model_name
 GEMINI_API_KEY=$gemini_key
 OPENAI_API_KEY=$openai_key
 GITHUB_PRIVATE_KEY_BASE64=$key_base64
