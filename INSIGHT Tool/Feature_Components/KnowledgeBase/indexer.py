@@ -40,16 +40,7 @@ class RepositoryIndexer:
     def __init__(self, neo4j_uri: str, neo4j_user: str, neo4j_password: str, 
                  model_name: str = "jinaai/jina-embeddings-v2-base-code",
                  index_dir: str = "Data_Storage/KnowledgeBase"):
-        """
-        Initialize repository indexer
-        
-        Args:
-            neo4j_uri: URI for Neo4j database
-            neo4j_user: Username for Neo4j
-            neo4j_password: Password for Neo4j
-            model_name: Name of the embedding model
-            index_dir: Directory to store indices
-        """
+        """Initialize repository indexer."""
         self.neo4j_uri = neo4j_uri
         self.neo4j_user = neo4j_user
         self.neo4j_password = neo4j_password
@@ -143,15 +134,7 @@ class RepositoryIndexer:
         
         return text
 
-        self.language_detector = LanguageDetector(self.parser_factory)
-        self.embedder = CodeEmbedder(model_name)
-        self.graph_store = GraphStore(neo4j_uri, neo4j_user, neo4j_password)
-        self.vector_store = VectorStore()
-        self.index_dir = Path(index_dir)
-        self.llm_service = LLMService()
-        
-        supported_langs = self.parser_factory.get_supported_languages()
-        logger.info(f"RepositoryIndexer initialized with support for: {', '.join(supported_langs)}")
+
     
     def _get_commit_sha(self, repo_path: str) -> str:
         """Get current commit SHA from repository"""
@@ -222,8 +205,40 @@ class RepositoryIndexer:
         commit_sha = self._get_commit_sha(repo_path)
         logger.info(f"Commit SHA: {commit_sha}")
         
+        # Define versioned index directory: repo_name/commit_sha
+        safe_repo_name = repo_name.replace('/', '_')
+        versioned_dir = self.index_dir / safe_repo_name / commit_sha
+        index_path = versioned_dir / "index.faiss"
+        metadata_path = versioned_dir / "metadata.json"
+        
+        # Check if already indexed
+        if index_path.exists() and metadata_path.exists():
+            logger.info(f"files found at {versioned_dir}. Checking graph...")
+            stats = self.graph_store.get_stats(repo_name) 
+            if stats['files'] > 0:
+                logger.info("Valid index and graph found. Skipping re-indexing.")
+                return IndexResult(
+                    repo_name=repo_name,
+                    commit_sha=commit_sha,
+                    total_files=stats['files'],
+                    total_functions=stats['functions'],
+                    index_path=str(index_path),
+                    metadata_path=str(metadata_path),
+                    graph_nodes=sum(stats.values()),
+                    graph_edges=stats['relationships'],
+                    indexing_time_seconds=0,
+                    failed_files=[]
+                )
+            else:
+                logger.warning("Index files exist but graph is empty. Re-indexing to ensure graph integrity.")
+
+        # Create directory if needed
+        versioned_dir.mkdir(parents=True, exist_ok=True)
+        
         # Collect all supported source files
         python_files = self._collect_source_files(repo_path)
+
+            
         if not python_files:
             logger.warning("No supported source files found")
             return IndexResult(
@@ -243,7 +258,9 @@ class RepositoryIndexer:
         if not self.graph_store.connect():
             raise ConnectionError("Failed to connect to Neo4j")
         
-        # Clear existing data for this repo
+        # Clear existing data for this repo (We overwrite for this SHA, and clear others? 
+        # Actually clearing by repo_name clears ALL versions for this repo. 
+        # This is fine as we only active one version at a time normally.)
         self.graph_store.clear_database(repo_name)
         
         # Load embedding model
@@ -392,10 +409,6 @@ class RepositoryIndexer:
             # Use skeleton for embedding (Imports + Globals + Signatures)
             full_path = repo_path_obj / file_path
             try:
-                # We need source code again. Optimization: Store it in file_info?
-                # For now read again or pass it if available.
-                # In parse loop we read it. Let's read again for simplicity or better, store it.
-                # Reading again is safer for memory if repos are huge, but slightly slower.
                 with open(full_path, 'r', encoding='utf-8', errors='ignore') as f:
                     source_code = f.read()
                 
@@ -442,8 +455,6 @@ class RepositoryIndexer:
         
         # Save indices
         logger.info("Saving indices...")
-        index_path = self.index_dir / repo_name.replace('/', '_') / "index.faiss"
-        metadata_path = self.index_dir / repo_name.replace('/', '_') / "metadata.json"
         
         self.vector_store.save_index(str(index_path))
         self.vector_store.save_metadata(str(metadata_path))
@@ -536,10 +547,6 @@ class RepositoryIndexer:
                 else:
                     self.graph_store.create_contains_relationship(file_id, func_id)
             
-            # Create helper map for function start lines in this file
-            # Map: (class_name or None, func_name) -> start_line
-            # This allows distinguishing MyClass.method vs global_func
-            # Note: func.class_name is None for global functions
             local_func_map = {}
             for func in file_info['functions']:
                 key = (func.class_name, func.name)
@@ -547,22 +554,9 @@ class RepositoryIndexer:
 
             # Create CALLS relationships with Scoped Resolution
             calls_map = file_info['calls'] # Dict[caller_name, List[CallInfo]]
-            
-            # Find the caller function info to get its scope (class name)
-            # We need to map caller_name back to FunctionInfo to know if it's inside a class
-            # because 'caller_name' key in calls_map is just the function name (might be ambiguous if same name in class vs global)
-            # But the parser traverse logic makes keys unique per definition scope?
-            # Actually python_parser traverse: calls_map keyed by simple func_name.
-            # If we have class A: def foo... and class B: def foo... 
-            # Both populate calls_map['foo']? NO! calls_map is per file.
-            # If python_parser uses simple name, and there are duplicates, we have a collision problem in the parser return format.
-            # Assuming unique names or handled by parser for now (Parser needs improvement for duplicate names, but let's proceed)
-            
             for caller_name, call_infos in calls_map.items():
                 
-                # Identify the caller(s) with this name in current file
-                # There might be multiple (e.g. in different classes)
-                # We'll try to link all of them for now as we don't have deeper context in the calls_map key
+                # Identify callers with this name (may be multiple if duplicate names exist)
                 potential_callers = [f for f in file_info['functions'] if f.name == caller_name]
                 
                 for caller_func in potential_callers:
@@ -583,27 +577,22 @@ class RepositoryIndexer:
         Resolve a function call to a specific Function ID.
         Returns ID if resolved, None otherwise.
         """
-        # Case 1: Method call on 'self' (Internal Class Method)
+        # Case 1: Internal Class Method (self.method)
         if call.scope == 'self' and caller_func.class_name:
-            # Look for function 'call.name' in the same class 'caller_func.class_name'
-            # In the same file
+            # Look for function in the same class
             for func in current_file_info['functions']:
                 if func.name == call.name and func.class_name == caller_func.class_name:
                     return self._generate_id(repo_name, current_file_path, func.name, str(func.start_line))
         
-        # Case 2: Local Scope (No scope provided)
+        # Case 2: Local/Global Scope
         if not call.scope:
-            # 2a. Look for function in the same class (implicit self? No, explicit in Python. explicit in Java)
-            # Python requires self.foo(), so no scope foo() is usually global or imported global.
-            # Java foo() is this.foo().
-            
-            # If Java and inside class:
+            # 2a. Same Class (Java implicit 'this')
             if caller_func.language == 'java' and caller_func.class_name:
                  for func in current_file_info['functions']:
                     if func.name == call.name and func.class_name == caller_func.class_name:
                         return self._generate_id(repo_name, current_file_path, func.name, str(func.start_line))
 
-            # 2b. Look for Global function in current file
+            # 2b. Global function in current file
             for func in current_file_info['functions']:
                 if func.name == call.name and not func.class_name:
                     return self._generate_id(repo_name, current_file_path, func.name, str(func.start_line))
@@ -623,11 +612,9 @@ class RepositoryIndexer:
                                 if func.name == call.name: # and is global? or class init?
                                     return self._generate_id(repo_name, target_file, func.name, str(func.start_line))
 
-        # Case 3: External Scope (obj.method or alias.func)
+        # Case 3: External Scope (Imported/Aliased)
         if call.scope:
             # Check if scope matches an import alias or module name
-            # import numpy as np -> scope 'np'
-            # import utils -> scope 'utils'
             resolved_module = None
             
             for imp in current_file_info['imports']:

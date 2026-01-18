@@ -11,8 +11,6 @@ import json
 
 # Fix for OpenMP runtime conflict (Error #15)
 os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
-# User request: Direct search without LLM query generation
-os.environ['SKIP_QUERY_GENERATION'] = 'true'
 
 # Setup paths
 script_path = os.path.abspath(__file__)
@@ -39,8 +37,7 @@ from dotenv import load_dotenv
 load_dotenv(os.path.join(insight_tool_path, ".env"))
 
 try:
-    from Feature_Components.KnowledgeBase.bug_localization import BugLocalization
-    from Feature_Components.knowledgeBase import IndexRepository, GetIndexStatus
+    from Feature_Components.Agent.agent import BugLocalizationAgent
     from Feature_Components.KnowledgeBase.indexer import RepositoryIndexer
     from config import Config
 except ImportError as e:
@@ -219,13 +216,14 @@ def evaluate():
         indexer = RepositoryIndexer(
             neo4j_uri=Config.NEO4J_URI,
             neo4j_user=Config.NEO4J_USER,
-            neo4j_password=Config.NEO4J_PASSWORD
+            neo4j_password=Config.NEO4J_PASSWORD,
+            index_dir=Config.KNOWLEDGE_BASE_DIR
         )
 
         # Process each issue
         repo_metrics = []
         
-        for issue_data in repo_issues.to_dict('records'): # Changed from iterrows to to_dict('records') for clarity with new variable name
+        for issue_data in repo_issues.to_dict('records'): # Testing: Limit to 1 issue for Agent verification
             issue_title = issue_data['Issue Title']
             issue_body = issue_data.get('Issue Description', '')
             ground_truth_files = ast.literal_eval(issue_data['Changed Files'])
@@ -240,27 +238,12 @@ def evaluate():
             # --- HISTORICAL CONSISTENCY CHECK ---
             state_changed = ensure_historical_state(repo_dir, base_sha)
             
-            # Check if index exists and corresponds to this state
-            # If state changed, we MUST re-index.
-            # We assume index is at: Data_Storage/KnowledgeBase/{repo_name} (replacing / with _)
-            index_path = os.path.join(project_root, "INSIGHT Tool", "Data_Storage", "KnowledgeBase", repo_name.replace("/", "_"))
-            
-            index_exists = os.path.exists(index_path) and os.path.exists(os.path.join(index_path, "index.faiss"))
-            
-            if state_changed or not index_exists:
-                if state_changed and index_exists:
-                    logger.warning(f"State changed to {base_sha} but index exists. Skipping re-indexing to save time (User Request).")
-                elif not index_exists:
-                    logger.info(f"Index missing for {repo_name}. Indexing...")
-                
-                    # Re-index
-                    try:
-                       indexer.index_repository(repo_dir, repo_name)
-                    except Exception as e:
-                        logger.error(f"Indexing failed for {repo_name} at {base_sha}: {e}")
-                        continue
-            else:
-                logger.info(f"Using existing index for {repo_name} (State matched or no base_sha)")
+            # Ensure index is up to date (Indexer handles versioning internally now)
+            try:
+                indexer.index_repository(repo_dir, repo_name)
+            except Exception as e:
+                logger.error(f"Indexing/Verification failed for {repo_name} at {base_sha}: {e}")
+                continue
             
             # --- END HISTORICAL CHECK ---
 
@@ -268,15 +251,8 @@ def evaluate():
             start_time = time.time()
             bug_localizer = None
             try:
-                import inspect
-                logger.info(f"BugLocalization module: {BugLocalization.__module__}")
-                try:
-                     logger.info(f"BugLocalization file: {BugLocalization.__file__}") # Usually not on class but let's try module if class fails
-                except:
-                     pass
-                logger.info(f"BugLocalization init signature: {inspect.signature(BugLocalization.__init__)}")
-                
-                bug_localizer = BugLocalization(repo_name, repo_dir)
+                logger.info(f"Initializing BugLocalizationAgent for {repo_name}")
+                bug_localizer = BugLocalizationAgent(repo_name, repo_dir)
                 
                 # Run localization
                 selected_funcs, all_candidates, token_usage = bug_localizer.localize(issue_title, issue_body)
@@ -423,6 +399,10 @@ def evaluate():
             if bug_localizer:
                  model_name = bug_localizer.llm_service.model_name
 
+            input_tokens = token_usage.get('input_tokens', token_usage.get('prompt_tokens', 0)) if token_usage else 0
+            output_tokens = token_usage.get('output_tokens', token_usage.get('completion_tokens', 0)) if token_usage else 0
+            total_tokens = token_usage.get('total_tokens', 0) if token_usage else 0
+
             result_row = {
                 'Repository': repo_name,
                 'Issue URL': issue_data['Issue URL'],
@@ -448,10 +428,11 @@ def evaluate():
                 'LLM FuncClass MAP': llm_func_class_map,
                 **{f'LLM FuncClass {k}': v for k, v in llm_func_class_metrics.items()},
                 
-                'Input Tokens': token_usage.get('input_tokens', token_usage.get('prompt_tokens', 0)) if token_usage else 0,
-                'Output Tokens': token_usage.get('output_tokens', token_usage.get('completion_tokens', 0)) if token_usage else 0,
-                'Total Tokens': token_usage.get('total_tokens', 0) if token_usage else 0,
-                'Duration': duration
+                'Input Tokens': input_tokens,
+                'Output Tokens': output_tokens,
+                'Total Tokens': total_tokens,
+                'Duration': duration,
+                'Analysis': selected_funcs[0].get('analysis', '') if selected_funcs else ''
             }
             results.append(result_row)
             

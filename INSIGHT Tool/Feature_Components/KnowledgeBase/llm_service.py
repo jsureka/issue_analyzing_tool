@@ -180,6 +180,9 @@ Generate a concise solution plan.
         except Exception as e:
             logger.error(f"Error generating patch: {e}")
             return f"Error generating patch: {e}"
+            return f"Error generating patch: {e}"
+
+
     def retry_with_backoff(func):
         """Decorator for retrying with exponential backoff"""
         import time
@@ -227,6 +230,67 @@ Generate a concise solution plan.
             return None
         return wrapper
 
+    @retry_with_backoff
+    def get_response(self, prompt: str, system_message: str = None, json_mode: bool = False) -> str:
+        """
+        Get a simple text response from the LLM.
+        
+        Args:
+            prompt: User prompt
+            system_message: System instruction
+            json_mode: Whether to expect/enforce JSON output (handled via prompt usually, but can enable model flags if supported)
+            
+        Returns:
+            Response string
+        """
+        if not self.is_available():
+            return "LLM unavailable"
+            
+        try:
+            messages = []
+            if system_message:
+                messages.append(("system", system_message))
+            messages.append(("human", prompt))
+            
+            prompt_template = ChatPromptTemplate.from_messages(messages)
+            chain = prompt_template | self.llm
+            
+            # If json_mode is requested, we might want to pass bind(response_format={"type": "json_object"}) 
+            # for OpenAI context, but for now we'll rely on the prompt being explicit.
+            # We can expand this later to use native JSON mode if available.
+            
+            # Escape curly braces in prompt inputs to avoid LangChain variable injection errors
+            sanitized_prompt = prompt.replace('{', '{{').replace('}', '}}') if prompt else ""
+            
+            # Re-create prompt template with sanitized input
+            # Actually, passing it as a variable is safer than f-string into template definition if using from_template
+            # But from_messages takes a list of (role, content). 
+            # If content contains brackets, it treats them as vars.
+            # We should construct the message objects directly to bypass templating if we can, 
+            # but ChatPromptTemplate is designed for templates.
+            # Easiest fix: use .from_messages with actual Message objects (not tuples) or ensure escaping.
+            # Let's try escaping.
+            
+            # Wait, if we use ("human", sanitized_prompt), it treats it as a template string.
+            # Better approach: Use ("human", "{input}") and pass input in invoke.
+            
+            safe_messages = []
+            if system_message:
+                # specific to system message which might be static
+                safe_system_msg = system_message.replace('{', '{{').replace('}', '}}')
+                safe_messages.append(("system", safe_system_msg))
+            
+            safe_messages.append(("human", "{user_input}"))
+            
+            prompt_template = ChatPromptTemplate.from_messages(safe_messages)
+            chain = prompt_template | self.llm
+            
+            response = chain.invoke({"user_input": prompt})
+            return response.content
+        except Exception as e:
+            logger.error(f"Error getting response: {e}")
+            return f"Error executing LLM request: {str(e)}"
+
 
 
 
@@ -270,7 +334,18 @@ Generate a concise solution plan.
                 type_label = cand.get('entity_type', 'unknown').upper()
                 class_info = f"Class: {cand.get('class_name')}\n" if cand.get('class_name') and cand.get('entity_type') == 'function' else ""
                 
-                return f"[{label} Candidate {idx}] (ID: {cand.get('id')}):\nType: {type_label}\nFile: {cand.get('file_path')}\n{class_info}Name: {cand.get('name')}\nCode:\n```\n{code_snippet}\n```\n\n"
+                # Format Graph Context
+                callers = cand.get('callers', [])
+                callees = cand.get('callees', [])
+                graph_context = ""
+                if callers:
+                    caller_names = [c.get('name') for c in callers[:5]] # Limit to top 5
+                    graph_context += f"Called By: {', '.join(caller_names)}\n"
+                if callees:
+                    callee_names = [c.get('name') for c in callees[:5]] # Limit to top 5
+                    graph_context += f"Calls: {', '.join(callee_names)}\n"
+                
+                return f"[{label} Candidate {idx}] (ID: {cand.get('id')}):\nType: {type_label}\nFile: {cand.get('file_path')}\n{class_info}{graph_context}Name: {cand.get('name')}\nCode:\n```\n{code_snippet}\n```\n\n"
 
             # Build Prompt Sections
             files_text = "\n".join([format_cand(c, i, "FILE") for i, c in enumerate(files)])

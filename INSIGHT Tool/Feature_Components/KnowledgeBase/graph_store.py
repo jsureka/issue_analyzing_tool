@@ -572,7 +572,7 @@ class GraphStore:
             logger.error(f"Failed to get functions in file {file_path}: {e}")
             return []
 
-    def get_function_neighbors(self, function_ids: List[str]) -> Dict[str, Dict[str, List[str]]]:
+    def get_function_neighbors_batch(self, function_ids: List[str]) -> Dict[str, Dict[str, List[str]]]:
         """
         Get immediate neighbors (callers and callees) for a list of functions.
         

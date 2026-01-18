@@ -46,6 +46,10 @@ class Config:
     # Use a fixed path for repos instead of tempdir for persistence if needed, 
     # or keep tempdir but make it configurable.
     REPO_STORAGE_PATH = os.getenv('REPO_STORAGE_PATH', os.path.join(os.getcwd(), 'insight_repos'))
+    
+    # Knowledge Base
+    BASE_DIR = os.path.abspath(os.path.dirname(__file__))
+    KNOWLEDGE_BASE_DIR = os.getenv('KNOWLEDGE_BASE_DIR', os.path.join(BASE_DIR, 'Data_Storage', 'KnowledgeBase'))
 
     @staticmethod
     def init_app(app):

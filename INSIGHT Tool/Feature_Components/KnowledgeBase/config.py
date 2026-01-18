@@ -9,7 +9,7 @@ from pathlib import Path
 DEFAULT_MODEL_NAME = "jinaai/jina-embeddings-v2-base-code"
 EMBEDDING_DIMENSION = 768
 MAX_TOKEN_LENGTH = 1024
-BATCH_SIZE = 32
+BATCH_SIZE = 4
 
 # Storage Paths
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
