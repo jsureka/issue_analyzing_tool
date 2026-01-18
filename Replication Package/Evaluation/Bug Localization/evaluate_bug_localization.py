@@ -39,7 +39,8 @@ from dotenv import load_dotenv
 load_dotenv(os.path.join(insight_tool_path, ".env"))
 
 try:
-    from Feature_Components.knowledgeBase import BugLocalization, IndexRepository, GetIndexStatus
+    from Feature_Components.KnowledgeBase.bug_localization import BugLocalization
+    from Feature_Components.knowledgeBase import IndexRepository, GetIndexStatus
     from Feature_Components.KnowledgeBase.indexer import RepositoryIndexer
     from config import Config
 except ImportError as e:
@@ -231,6 +232,9 @@ def evaluate():
             # Normalized GT
             ground_truth_files = [os.path.normpath(f) for f in ground_truth_files]
             
+            ground_truth_classes = ast.literal_eval(issue_data.get('Changed Classes', '[]'))
+            ground_truth_funcs = ast.literal_eval(issue_data.get('Changed Functions', '[]'))
+            
             base_sha = issue_data.get('Base SHA')
             
             # --- HISTORICAL CONSISTENCY CHECK ---
@@ -244,23 +248,17 @@ def evaluate():
             index_exists = os.path.exists(index_path) and os.path.exists(os.path.join(index_path, "index.faiss"))
             
             if state_changed or not index_exists:
-                if state_changed:
-                    logger.info(f"State changed to {base_sha}. Re-indexing {repo_name}...")
-                    # Clear existing index to avoid mixing stats
-                    if os.path.exists(index_path):
-                        try:
-                            shutil.rmtree(index_path)
-                        except Exception as e:
-                             logger.warning(f"Failed to clear index path: {e}")
-                else:
+                if state_changed and index_exists:
+                    logger.warning(f"State changed to {base_sha} but index exists. Skipping re-indexing to save time (User Request).")
+                elif not index_exists:
                     logger.info(f"Index missing for {repo_name}. Indexing...")
                 
-                # Re-index
-                try:
-                   indexer.index_repository(repo_dir, repo_name)
-                except Exception as e:
-                    logger.error(f"Indexing failed for {repo_name} at {base_sha}: {e}")
-                    continue
+                    # Re-index
+                    try:
+                       indexer.index_repository(repo_dir, repo_name)
+                    except Exception as e:
+                        logger.error(f"Indexing failed for {repo_name} at {base_sha}: {e}")
+                        continue
             else:
                 logger.info(f"Using existing index for {repo_name} (State matched or no base_sha)")
             
@@ -268,10 +266,16 @@ def evaluate():
 
             # Now Localize
             start_time = time.time()
+            bug_localizer = None
             try:
                 import inspect
-                logger.info(f"BugLocalization args: {inspect.signature(BugLocalization.__init__)}")
-                logger.info(f"Calling BugLocalization with: {repo_name}, {repo_dir}")
+                logger.info(f"BugLocalization module: {BugLocalization.__module__}")
+                try:
+                     logger.info(f"BugLocalization file: {BugLocalization.__file__}") # Usually not on class but let's try module if class fails
+                except:
+                     pass
+                logger.info(f"BugLocalization init signature: {inspect.signature(BugLocalization.__init__)}")
+                
                 bug_localizer = BugLocalization(repo_name, repo_dir)
                 
                 # Run localization
@@ -322,9 +326,9 @@ def evaluate():
             logger.info(f"\n--- Issue: {issue_title} ---")
             logger.info(f"GT Files: {ground_truth_files}")
             logger.info(f"Pred Files: {pred_files}")
-            logger.info(f"GT Classes: {gt_classes}")
+            logger.info(f"GT Classes: {ground_truth_classes}")
             logger.info(f"Pred Classes: {pred_classes}")
-            logger.info(f"GT Funcs: {gt_funcs}")
+            logger.info(f"GT Funcs: {ground_truth_funcs}")
             logger.info(f"Pred Funcs: {pred_funcs}")
 
             # 1. Retrieval Stage (Candidates)
@@ -352,19 +356,19 @@ def evaluate():
             logger.info(f"--- Retrieval Debug (Top-{Config.RETRIEVER_TOP_K}) ---")
             
             # Files
-            found_files = [f for f in gt_files if any(r.endswith(f) or f.endswith(r) for r in retrieved_files)]
-            missing_files = set(gt_files) - set(found_files) 
-            logger.info(f"GT Files Found in Retrieval: {len(found_files)}/{len(gt_files)} -> {found_files}")
+            found_files = [f for f in ground_truth_files if any(r.endswith(f) or f.endswith(r) for r in retrieved_files)]
+            missing_files = set(ground_truth_files) - set(found_files) 
+            logger.info(f"GT Files Found in Retrieval: {len(found_files)}/{len(ground_truth_files)} -> {found_files}")
             if missing_files:
                  logger.info(f"GT Files MISSING in Retrieval: {missing_files}")
 
             # Classes
-            found_classes = [c for c in gt_classes if c in retrieved_classes]
-            logger.info(f"GT Classes Found in Retrieval: {len(found_classes)}/{len(gt_classes)} -> {found_classes}")
+            found_classes = [c for c in ground_truth_classes if c in retrieved_classes]
+            logger.info(f"GT Classes Found in Retrieval: {len(found_classes)}/{len(ground_truth_classes)} -> {found_classes}")
 
             # Funcs
-            found_funcs = [f for f in gt_funcs if f in retrieved_funcs]
-            logger.info(f"GT Functions Found in Retrieval: {len(found_funcs)}/{len(gt_funcs)} -> {found_funcs}")
+            found_funcs = [f for f in ground_truth_funcs if f in retrieved_funcs]
+            logger.info(f"GT Functions Found in Retrieval: {len(found_funcs)}/{len(ground_truth_funcs)} -> {found_funcs}")
 
             llm_input_files = set()
             llm_input_classes = set()
@@ -378,8 +382,8 @@ def evaluate():
 
             logger.info(f"--- LLM Input Debug ---")
             # Classes in LLM Input
-            input_classes = [c for c in gt_classes if c in llm_input_classes]
-            logger.info(f"GT Classes in LLM Input: {len(input_classes)}/{len(gt_classes)} -> {input_classes}")
+            input_classes = [c for c in ground_truth_classes if c in llm_input_classes]
+            logger.info(f"GT Classes in LLM Input: {len(input_classes)}/{len(ground_truth_classes)} -> {input_classes}")
 
             # Assign to variables expected by metric calc
             # but original code used selected_files, selected_funcs_names, selected_class_names)
@@ -391,23 +395,23 @@ def evaluate():
             k_values = [1, 5, 10, 20, 30]
             
             # Retriever Metrics (Files)
-            retriever_metrics = calculate_metrics_at_k(retrieved_files, gt_files, k_values)
-            retriever_map = calculate_ap(retrieved_files, gt_files)
+            retriever_metrics = calculate_metrics_at_k(retrieved_files, ground_truth_files, k_values)
+            retriever_map = calculate_ap(retrieved_files, ground_truth_files)
             
             # LLM Metrics (Files) - k=[1, 3, 5, 10]
-            llm_metrics = calculate_metrics_at_k(selected_files, gt_files, [1, 3, 5, 10])
-            llm_map = calculate_ap(selected_files, gt_files)
+            llm_metrics = calculate_metrics_at_k(selected_files, ground_truth_files, [1, 3, 5, 10])
+            llm_map = calculate_ap(selected_files, ground_truth_files)
 
             # LLM Metrics (Classes) - k=[1, 3, 5, 10]
-            llm_class_metrics = calculate_metrics_at_k(selected_class_names, gt_classes, [1, 3, 5, 10])
-            llm_class_map = calculate_ap(selected_class_names, gt_classes)
+            llm_class_metrics = calculate_metrics_at_k(selected_class_names, ground_truth_classes, [1, 3, 5, 10])
+            llm_class_map = calculate_ap(selected_class_names, ground_truth_classes)
 
             # LLM Metrics (Functions) - k=[1, 3, 5, 10]
-            llm_func_metrics = calculate_metrics_at_k(selected_funcs_names, gt_funcs, [1, 3, 5, 10])
-            llm_func_map = calculate_ap(selected_funcs_names, gt_funcs)
+            llm_func_metrics = calculate_metrics_at_k(selected_funcs_names, ground_truth_funcs, [1, 3, 5, 10])
+            llm_func_map = calculate_ap(selected_funcs_names, ground_truth_funcs)
             
             # LLM Metrics (Function/Class Combined) - k=[1, 3, 5, 10]
-            gt_func_class = list(set(gt_classes + gt_funcs))
+            gt_func_class = list(set(ground_truth_classes + ground_truth_funcs))
             pred_func_class = []
             pred_func_class = selected_funcs_names + selected_class_names
             
@@ -415,10 +419,14 @@ def evaluate():
             llm_func_class_map = calculate_ap(pred_func_class, gt_func_class)
 
             # Combine Results
+            model_name = "Unknown"
+            if bug_localizer:
+                 model_name = bug_localizer.llm_service.model_name
+
             result_row = {
                 'Repository': repo_name,
-                'Issue URL': row['Issue URL'],
-                'Model': bug_localization.llm_service.model_name,
+                'Issue URL': issue_data['Issue URL'],
+                'Model': model_name,
                 
                 # Retriever Metrics
                 'Retriever MAP': retriever_map,

@@ -12,7 +12,7 @@ MAX_TOKEN_LENGTH = 1024
 BATCH_SIZE = 32
 
 # Storage Paths
-BASE_DIR = Path(__file__).parent.parent.parent
+BASE_DIR = Path(__file__).resolve().parent.parent.parent
 INDEX_STORAGE_DIR = BASE_DIR / "Data_Storage" / "KnowledgeBase"
 INDEX_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
 
