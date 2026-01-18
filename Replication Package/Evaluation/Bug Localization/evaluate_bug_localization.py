@@ -9,6 +9,11 @@ from tqdm import tqdm
 import time
 import json
 
+# Fix for OpenMP runtime conflict (Error #15)
+os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
+# User request: Direct search without LLM query generation
+os.environ['SKIP_QUERY_GENERATION'] = 'true'
+
 # Setup paths
 script_path = os.path.abspath(__file__)
 script_dir = os.path.dirname(script_path)
@@ -65,6 +70,38 @@ def clone_repo(repo_url, target_dir):
         return True
     except subprocess.CalledProcessError as e:
         logger.error(f"Failed to clone {repo_url}: {e}")
+        return False
+
+def ensure_historical_state(repo_path, base_sha):
+    """
+    Ensures the repository is checked out to the specific base_sha.
+    Returns True if the state was changed (requiring re-indexing), False otherwise.
+    """
+    if not base_sha:
+        return False
+        
+    try:
+        # Get current HEAD
+        result = subprocess.run(['git', '-C', repo_path, 'rev-parse', 'HEAD'], capture_output=True, text=True, check=True)
+        current_sha = result.stdout.strip()
+        
+        if current_sha == base_sha:
+            return False # Already there
+            
+        logger.info(f"Switching {os.path.basename(repo_path)} from {current_sha[:7]} to {base_sha[:7]}...")
+        # Fetch if needed (shallow clones might miss it) - usually not needed if simple clone
+        subprocess.run(['git', '-C', repo_path, 'checkout', base_sha, '-f'], check=True, capture_output=True)
+        return True # Changed state
+        
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Failed to checkout {base_sha}: {e}")
+        # Try fetch and retry
+        try:
+             subprocess.run(['git', '-C', repo_path, 'fetch', 'origin', base_sha], check=True, capture_output=True)
+             subprocess.run(['git', '-C', repo_path, 'checkout', base_sha, '-f'], check=True, capture_output=True)
+             return True
+        except Exception as e2:
+             logger.error(f"Retry checkout failed: {e2}")
         return False
 
         return False
@@ -162,7 +199,7 @@ def evaluate():
     results = []
     
     # Group by repository to minimize cloning/indexing
-    repos = df['Repository'].unique()
+    repos = df['Repository'].unique()[:5]
     
     for repo_name in repos:
         repo_issues = df[df['Repository'] == repo_name]
@@ -171,59 +208,76 @@ def evaluate():
         
         # Prepare local path
         repo_dir_name = repo_name.replace('/', '_')
-        repo_path = os.path.join(TEMP_REPO_DIR, repo_dir_name)
+        repo_dir = os.path.join(TEMP_REPO_DIR, repo_dir_name)
         
-        # 1. Clone
-        if not clone_repo(repo_url, repo_path):
+        # 1. Clone (Ensure repo exists)
+        if not clone_repo(repo_url, repo_dir):
             continue
             
-        # 2. Index (Check if already indexed)
-        status = GetIndexStatus(repo_name)
-        
-        if status.get('indexed'):
-            logger.info(f"Repository {repo_name} is already indexed. Skipping indexing.")
-        else:
-            logger.info(f"Indexing {repo_name}...")
-            try:
-                index_result = IndexRepository(repo_path, repo_name)
-            finally:
-                if not index_result.get('success'):
-                    logger.error(f"Indexing failed for {repo_name}: {index_result.get('error')}")
-                    continue
-            
-        # Initialize BugLocalization
-        from Feature_Components.KnowledgeBase.bug_localization import BugLocalization
-        bug_localization = BugLocalization(repo_name, repo_path)
+        # Create Indexer wrapper
+        indexer = RepositoryIndexer(
+            neo4j_uri=Config.NEO4J_URI,
+            neo4j_user=Config.NEO4J_USER,
+            neo4j_password=Config.NEO4J_PASSWORD
+        )
 
-        # 3. Evaluate Issues
-        for idx, row in tqdm(repo_issues.iterrows(), total=len(repo_issues), desc=f"Evaluating {repo_name}"):
+        # Process each issue
+        repo_metrics = []
+        
+        for issue_data in repo_issues.to_dict('records'): # Changed from iterrows to to_dict('records') for clarity with new variable name
+            issue_title = issue_data['Issue Title']
+            issue_body = issue_data.get('Issue Description', '')
+            ground_truth_files = ast.literal_eval(issue_data['Changed Files'])
+            # Normalized GT
+            ground_truth_files = [os.path.normpath(f) for f in ground_truth_files]
             
-            issue_title = row['Issue Title']
-            issue_body = row['Issue Description']
+            base_sha = issue_data.get('Base SHA')
             
-            # Ground Truth
-            try:
-                gt_files = ast.literal_eval(row['Changed Files'])
-            except:
-                gt_files = []
+            # --- HISTORICAL CONSISTENCY CHECK ---
+            state_changed = ensure_historical_state(repo_dir, base_sha)
             
-            try:
-                gt_classes = ast.literal_eval(row['Changed Classes']) if 'Changed Classes' in row else []
-            except:
-                gt_classes = []
+            # Check if index exists and corresponds to this state
+            # If state changed, we MUST re-index.
+            # We assume index is at: Data_Storage/KnowledgeBase/{repo_name} (replacing / with _)
+            index_path = os.path.join(project_root, "INSIGHT Tool", "Data_Storage", "KnowledgeBase", repo_name.replace("/", "_"))
+            
+            index_exists = os.path.exists(index_path) and os.path.exists(os.path.join(index_path, "index.faiss"))
+            
+            if state_changed or not index_exists:
+                if state_changed:
+                    logger.info(f"State changed to {base_sha}. Re-indexing {repo_name}...")
+                    # Clear existing index to avoid mixing stats
+                    if os.path.exists(index_path):
+                        try:
+                            shutil.rmtree(index_path)
+                        except Exception as e:
+                             logger.warning(f"Failed to clear index path: {e}")
+                else:
+                    logger.info(f"Index missing for {repo_name}. Indexing...")
                 
-            try:
-                gt_funcs = ast.literal_eval(row['Changed Functions'])
-            except:
-                gt_funcs = []
-                
-            # Run Localization
+                # Re-index
+                try:
+                   indexer.index_repository(repo_dir, repo_name)
+                except Exception as e:
+                    logger.error(f"Indexing failed for {repo_name} at {base_sha}: {e}")
+                    continue
+            else:
+                logger.info(f"Using existing index for {repo_name} (State matched or no base_sha)")
+            
+            # --- END HISTORICAL CHECK ---
+
+            # Now Localize
             start_time = time.time()
-            
             try:
-                selected_funcs, all_candidates, token_usage = bug_localization.localize(issue_title, issue_body)
+                import inspect
+                logger.info(f"BugLocalization args: {inspect.signature(BugLocalization.__init__)}")
+                logger.info(f"Calling BugLocalization with: {repo_name}, {repo_dir}")
+                bug_localizer = BugLocalization(repo_name, repo_dir)
+                
+                # Run localization
+                selected_funcs, all_candidates, token_usage = bug_localizer.localize(issue_title, issue_body)
             except Exception as e:
-                logger.error(f"Error localizing issue {row['Issue URL']}: {e}")
+                logger.error(f"Error localizing issue {issue_data['Issue URL']}: {e}") # Changed row['Issue URL'] to issue_data['Issue URL']
                 selected_funcs = []
                 all_candidates = []
                 token_usage = {}
@@ -266,7 +320,7 @@ def evaluate():
             
             # DEBUG: Print comparison
             logger.info(f"\n--- Issue: {issue_title} ---")
-            logger.info(f"GT Files: {gt_files}")
+            logger.info(f"GT Files: {ground_truth_files}")
             logger.info(f"Pred Files: {pred_files}")
             logger.info(f"GT Classes: {gt_classes}")
             logger.info(f"Pred Classes: {pred_classes}")

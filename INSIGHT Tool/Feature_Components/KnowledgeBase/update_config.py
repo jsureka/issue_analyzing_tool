@@ -39,7 +39,7 @@ class UpdateConfig:
     metrics_retention_days: int = 90
     
     # Model settings
-    embedding_model: str = "microsoft/unixcoder-base"
+    embedding_model: str = "jinaai/jina-embeddings-v2-base-code"
     
     # Neo4j settings
     neo4j_uri: str = "bolt://localhost:7687"
@@ -102,7 +102,7 @@ class UpdateConfig:
             metrics_retention_days=get_int('METRICS_RETENTION_DAYS', 90),
             
             # Model settings
-            embedding_model=get_str('EMBEDDING_MODEL', 'microsoft/unixcoder-base'),
+            embedding_model=get_str('EMBEDDING_MODEL', 'jinaai/jina-embeddings-v2-base-code'),
             
             # Neo4j settings
             neo4j_uri=get_str('NEO4J_URI', 'bolt://localhost:7687'),

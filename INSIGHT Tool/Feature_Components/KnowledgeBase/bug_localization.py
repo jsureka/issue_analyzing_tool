@@ -68,13 +68,22 @@ class BugLocalization:
         # 1. Process Issue
         processed_issue = self.issue_processor.process_issue(issue_title, issue_body)
         
-        # 1.5 Generate Smart Search Query
-        query_result = self.llm_service.generate_search_query(issue_title, issue_body)
+        if os.getenv("SKIP_QUERY_GENERATION", "False").lower() == "true":
+            logger.info("Skipping smart search query generation (requested via config).")
+            search_query = issue_title
+            is_test_related = False
+        else:
+            # 1.5 Generate Smart Search Query
+            try:
+                query_result = self.llm_service.generate_search_query(issue_title, issue_body)
+                search_query = query_result.get("query", issue_title)
+                is_test_related = query_result.get("is_test_related", False)
+            except Exception as e:
+                logger.error(f"Failed to generate search query: {e}")
+                search_query = issue_title
+                is_test_related = False
         
-        search_query = query_result.get("query", issue_title)
-        is_test_related = query_result.get("is_test_related", False)
-        
-        logger.info(f"Generated search query: {search_query} (Test Related: {is_test_related})")
+        logger.info(f"Using search query: {search_query} (Test Related: {is_test_related})")
         
         # Embed the query instead of the raw issue
         query_embedding = self.embedder.embed_function(search_query, None, "", 512)
@@ -130,6 +139,47 @@ class BugLocalization:
         # Index for quick lookup of existing IDs
         existing_ids = {c['id'] for c in initial_candidates}
         
+        # 3. New Step: Graph Expansion (One-Hop Neighbors)
+        # We only expand the top K retrieved functions to avoid explosion
+        top_k_for_expansion = 5
+        ids_to_expand = [c['id'] for c in initial_candidates if c['entity_type'] == 'function'][:top_k_for_expansion]
+        
+        if ids_to_expand:
+            logger.info(f"Expanding graph for {len(ids_to_expand)} top candidates...")
+            # Use optimized method to get paths immediately
+            neighbors_map = self.graph_store.get_function_neighbors_with_paths(ids_to_expand)
+            
+            for fid in ids_to_expand:
+                neighbors = neighbors_map.get(fid, {})
+                
+                # Check for neighbors in map and add them
+                all_neighbors = neighbors.get('callers', []) + neighbors.get('callees', [])
+                for node_data in all_neighbors:
+                    if node_data['id'] not in existing_ids:
+                        # We now have 'path' in node_data!
+                        file_path = node_data.get('path')
+                        
+                        cand = {
+                            'id': node_data['id'],
+                            'entity_type': 'function',
+                            'name': node_data['name'],
+                            'file_path': file_path, # Resolved from graph!
+                            'score': 0.1, # Lower score for neighbors
+                            'signature': node_data.get('signature', ''),
+                            'start_line': node_data.get('start_line', 0),
+                            'end_line': node_data.get('end_line', 0),
+                            'is_neighbor': True # Marker
+                        }
+                        
+                        # Read code immediately if path exists to ensure readiness
+                        if file_path:
+                             hydrated = self._create_candidate_from_node(cand, 'function', file_path)
+                             if hydrated and hydrated.get('code'):
+                                 cand['code'] = hydrated['code']
+
+                        candidates_funcs.append(cand)
+                        existing_ids.add(cand['id'])
+
         for cand in initial_candidates:
             etype = cand.get('entity_type', 'function')
             if etype == 'file':
@@ -196,6 +246,19 @@ class BugLocalization:
             p_class = ctx.get('parent_class')
             p_file = ctx.get('parent_file')
             
+            # Backfill file path if missing (e.g. for neighbors)
+            if not func.get('file_path') and p_file:
+                 func['file_path'] = p_file.get('path')
+                 # Now we can lazy-load code if needed?
+                 # Better: try to read code now if it was missing
+                 if 'code' not in func or not func['code']:
+                     # Re-hydrate code
+                     pass # We will do a generic code read pass if we want, or just rely on signature
+                     # Let's try to read it
+                     hydrated = self._create_candidate_from_node(func, 'function', func['file_path'])
+                     if hydrated and hydrated.get('code'):
+                         func['code'] = hydrated['code']
+
             # Add Class if missing
             if p_class and p_class.get('id') not in existing_ids:
                 # We need file path to read code. Use 'p_file' path if available.

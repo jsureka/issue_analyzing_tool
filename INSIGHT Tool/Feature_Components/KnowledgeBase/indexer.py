@@ -37,22 +37,112 @@ class IndexResult:
 class RepositoryIndexer:
     """Orchestrates repository indexing process"""
     
-    def __init__(self, model_name: str = "microsoft/unixcoder-base",
-                 neo4j_uri: str = "bolt://localhost:7687",
-                 neo4j_user: str = "neo4j",
-                 neo4j_password: str = "password",
+    def __init__(self, neo4j_uri: str, neo4j_user: str, neo4j_password: str, 
+                 model_name: str = "jinaai/jina-embeddings-v2-base-code",
                  index_dir: str = "Data_Storage/KnowledgeBase"):
         """
         Initialize repository indexer
         
         Args:
-            model_name: Embedding model name
-            neo4j_uri: Neo4j connection URI
-            neo4j_user: Neo4j username
-            neo4j_password: Neo4j password
+            neo4j_uri: URI for Neo4j database
+            neo4j_user: Username for Neo4j
+            neo4j_password: Password for Neo4j
+            model_name: Name of the embedding model
             index_dir: Directory to store indices
         """
+        self.neo4j_uri = neo4j_uri
+        self.neo4j_user = neo4j_user
+        self.neo4j_password = neo4j_password
+        self.model_name = model_name
+        self.index_dir = Path(index_dir)
+        
         self.parser_factory = ParserFactory()
+        self.language_detector = LanguageDetector(self.parser_factory)
+        self.embedder = CodeEmbedder(model_name)
+        self.graph_store = GraphStore(neo4j_uri, neo4j_user, neo4j_password)
+        self.vector_store = VectorStore(dimension=768)
+        
+    @staticmethod
+    def create_file_skeleton(source_code: str, functions: List[Any], classes: List[Any]) -> str:
+        """
+        Create a skeleton of the file by masking top-level function and class bodies.
+        Preserves imports, globals, and top-level logic.
+        """
+        lines = source_code.splitlines()
+        output = []
+        
+        # Identify top-level entities (functions and classes)
+        # Helper to get start/end lines
+        candidates = []
+        for f in functions:
+            if not f.class_name: # Top level function
+                candidates.append(f)
+        candidates.extend(classes) # All classes treated as top level candidates
+        
+        # Sort by start line
+        candidates.sort(key=lambda x: x.start_line)
+        
+        # Merge overlapped entities (e.g. nested classes shouldn't be processed if parent is)
+        merged = []
+        last_end = -1
+        for ent in candidates:
+            # 1-based indexing in entities
+            start = ent.start_line
+            end = ent.end_line
+            
+            # If this entity starts after the last one ended, it's a new top-level block
+            if start > last_end:
+                merged.append(ent)
+                last_end = end
+                
+        # Reconstruct file with masking
+        current_line_idx = 0 # 0-based
+        ent_idx = 0
+        
+        while current_line_idx < len(lines):
+            # Check if we reached the start of a maskable entity
+            if ent_idx < len(merged):
+                next_ent = merged[ent_idx]
+                ent_start_idx = next_ent.start_line - 1 # 0-based
+                ent_end_idx = next_ent.end_line - 1     # 0-based
+                
+                if current_line_idx == ent_start_idx:
+                    # Keep the signature/first line
+                    output.append(lines[current_line_idx])
+                    output.append("    ... # Body masked")
+                    
+                    # Skip to end of entity
+                    current_line_idx = ent_end_idx + 1
+                    ent_idx += 1
+                    continue
+            
+            # Keep normal lines (imports, globals, whitespace)
+            output.append(lines[current_line_idx])
+            current_line_idx += 1
+            
+        return "\n".join(output)
+
+    @staticmethod
+    def create_class_skeleton(class_obj: Any, methods: List[Any]) -> str:
+        """
+        Create a class skeleton: Class Docstring + __init__ (full) + Others (signature only).
+        """
+        text = f"class {class_obj.name}:\n"
+        if class_obj.docstring:
+            text += f'    """{class_obj.docstring}"""\n'
+            
+        for m in methods:
+            if m.name == "__init__":
+                # Keep full body for __init__ to capture properties
+                # Note: m.body usually includes the signature in tree-sitter extraction
+                text += getattr(m, 'body', '') + "\n"
+            else:
+                # Signature only for others
+                text += f"    {m.signature}\n"
+                text += "        ... # Body masked\n"
+        
+        return text
+
         self.language_detector = LanguageDetector(self.parser_factory)
         self.embedder = CodeEmbedder(model_name)
         self.graph_store = GraphStore(neo4j_uri, neo4j_user, neo4j_password)
@@ -264,21 +354,16 @@ class RepositoryIndexer:
                 'language': func.language
             })
         
+        
         # --- Generate embeddings for Classes ---
         class_texts = []
         class_metadata = []
         
         for cls in all_classes:
-            # Prepare text for embedding: Docstring + Method Signatures (body is too large)
-            text = f"class {cls.name}\n"
-            if cls.docstring:
-                text += f"{cls.docstring}\n"
-            
-            # Find methods in this class to add their signatures
+            # Prepare text for embedding: Skeleton (Docstring + __init__ + Signatures)
             methods_in_class = [f for f in all_functions if f.class_name == cls.name]
-            for m in methods_in_class:
-                text += f"{m.signature}\n"
-                
+            text = self.create_class_skeleton(cls, methods_in_class)
+            
             class_texts.append(text)
             
             # Find file path
@@ -304,22 +389,37 @@ class RepositoryIndexer:
         file_metadata = []
         
         for file_path, file_info in file_info_map.items():
-            # Prepare text: Imports + Docstring + List of Classes/Functions
-            text = f"File: {file_path}\n"
-            
-            # Add imports
-            if file_info['imports']:
-                text += "Imports:\n" + "\n".join(file_info['imports']) + "\n"
+            # Use skeleton for embedding (Imports + Globals + Signatures)
+            full_path = repo_path_obj / file_path
+            try:
+                # We need source code again. Optimization: Store it in file_info?
+                # For now read again or pass it if available.
+                # In parse loop we read it. Let's read again for simplicity or better, store it.
+                # Reading again is safer for memory if repos are huge, but slightly slower.
+                with open(full_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    source_code = f.read()
                 
-            # Add file-level docstring if likely present (first function docstring often misattributed, check heuristic?)
-            # Simplified: just list content
-            
-            text += "Contents:\n"
-            for c in file_info['classes']:
-                text += f"class {c.name}\n"
-            for f in file_info['functions']:
-                if not f.class_name: # Top level functions
-                    text += f"function {f.name}\n"
+                text = self.create_file_skeleton(
+                    source_code, 
+                    file_info['functions'], 
+                    file_info['classes']
+                )
+                
+                # Prepend basic metadata
+                header = f"File: {file_path}\n"
+                text = header + text
+            except Exception as e:
+                logger.warning(f"Failed to read file for embedding {file_path}: {e}")
+                # Fallback to simple listing if skeleton fails
+                text = f"File: {file_path}\n"
+                if file_info['imports']:
+                    text += "Imports:\n" + "\n".join(file_info['imports']) + "\n"
+                text += "Contents:\n"
+                for c in file_info['classes']:
+                    text += f"class {c.name}\n"
+                for f in file_info['functions']:
+                    if not f.class_name:
+                        text += f"function {f.name}\n"
             
             file_texts.append(text)
             
@@ -436,17 +536,139 @@ class RepositoryIndexer:
                 else:
                     self.graph_store.create_contains_relationship(file_id, func_id)
             
-            # Create helper map for function start lines
-            func_start_lines = {f.name: str(f.start_line) for f in file_info['functions']}
+            # Create helper map for function start lines in this file
+            # Map: (class_name or None, func_name) -> start_line
+            # This allows distinguishing MyClass.method vs global_func
+            # Note: func.class_name is None for global functions
+            local_func_map = {}
+            for func in file_info['functions']:
+                key = (func.class_name, func.name)
+                local_func_map[key] = str(func.start_line)
 
-            # Create CALLS relationships
-            calls_map = file_info['calls']
-            for caller_name, callees in calls_map.items():
-                if caller_name in func_start_lines:
-                    start_line = func_start_lines[caller_name]
-                    caller_id = self._generate_id(repo_name, file_path, caller_name, start_line)
-                    for callee_name in callees:
-                        self.graph_store.create_calls_relationship(caller_id, callee_name)
+            # Create CALLS relationships with Scoped Resolution
+            calls_map = file_info['calls'] # Dict[caller_name, List[CallInfo]]
+            
+            # Find the caller function info to get its scope (class name)
+            # We need to map caller_name back to FunctionInfo to know if it's inside a class
+            # because 'caller_name' key in calls_map is just the function name (might be ambiguous if same name in class vs global)
+            # But the parser traverse logic makes keys unique per definition scope?
+            # Actually python_parser traverse: calls_map keyed by simple func_name.
+            # If we have class A: def foo... and class B: def foo... 
+            # Both populate calls_map['foo']? NO! calls_map is per file.
+            # If python_parser uses simple name, and there are duplicates, we have a collision problem in the parser return format.
+            # Assuming unique names or handled by parser for now (Parser needs improvement for duplicate names, but let's proceed)
+            
+            for caller_name, call_infos in calls_map.items():
+                
+                # Identify the caller(s) with this name in current file
+                # There might be multiple (e.g. in different classes)
+                # We'll try to link all of them for now as we don't have deeper context in the calls_map key
+                potential_callers = [f for f in file_info['functions'] if f.name == caller_name]
+                
+                for caller_func in potential_callers:
+                    caller_id = self._generate_id(repo_name, file_path, caller_func.name, str(caller_func.start_line))
+                    
+                    for call in call_infos:
+                        # Attempt to resolve the target
+                        target_id = self._resolve_call_target(
+                            repo_name, call, file_path, file_info, file_info_map, caller_func
+                        )
+                        
+                        if target_id:
+                            self.graph_store.create_call_by_id(caller_id, target_id)
+    
+    def _resolve_call_target(self, repo_name: str, call: Any, current_file_path: str, 
+                           current_file_info: Dict, all_files_map: Dict, caller_func: Any) -> Optional[str]:
+        """
+        Resolve a function call to a specific Function ID.
+        Returns ID if resolved, None otherwise.
+        """
+        # Case 1: Method call on 'self' (Internal Class Method)
+        if call.scope == 'self' and caller_func.class_name:
+            # Look for function 'call.name' in the same class 'caller_func.class_name'
+            # In the same file
+            for func in current_file_info['functions']:
+                if func.name == call.name and func.class_name == caller_func.class_name:
+                    return self._generate_id(repo_name, current_file_path, func.name, str(func.start_line))
+        
+        # Case 2: Local Scope (No scope provided)
+        if not call.scope:
+            # 2a. Look for function in the same class (implicit self? No, explicit in Python. explicit in Java)
+            # Python requires self.foo(), so no scope foo() is usually global or imported global.
+            # Java foo() is this.foo().
+            
+            # If Java and inside class:
+            if caller_func.language == 'java' and caller_func.class_name:
+                 for func in current_file_info['functions']:
+                    if func.name == call.name and func.class_name == caller_func.class_name:
+                        return self._generate_id(repo_name, current_file_path, func.name, str(func.start_line))
+
+            # 2b. Look for Global function in current file
+            for func in current_file_info['functions']:
+                if func.name == call.name and not func.class_name:
+                    return self._generate_id(repo_name, current_file_path, func.name, str(func.start_line))
+            
+            # 2c. Check "From Imports": from module import func
+            for imp in current_file_info['imports']:
+                # ImportInfo: module_name, alias, imported_elements
+                # If we have 'from X import func' (alias handle?)
+                if imp.imported_elements and call.name in imp.imported_elements:
+                    # Found imported function. Resolve module X.
+                    target_file = self._find_file_for_module(imp.module_name, all_files_map)
+                    if target_file:
+                        # Look for global func 'call.name' in target_file
+                        target_info = all_files_map.get(target_file)
+                        if target_info:
+                            for func in target_info['functions']:
+                                if func.name == call.name: # and is global? or class init?
+                                    return self._generate_id(repo_name, target_file, func.name, str(func.start_line))
+
+        # Case 3: External Scope (obj.method or alias.func)
+        if call.scope:
+            # Check if scope matches an import alias or module name
+            # import numpy as np -> scope 'np'
+            # import utils -> scope 'utils'
+            resolved_module = None
+            
+            for imp in current_file_info['imports']:
+                if imp.alias == call.scope:
+                    resolved_module = imp.module_name
+                    break
+                if imp.module_name == call.scope: # and not imp.alias?
+                     resolved_module = imp.module_name
+                     break
+            
+            if resolved_module:
+                target_file = self._find_file_for_module(resolved_module, all_files_map)
+                if target_file and target_file in all_files_map:
+                    target_info = all_files_map[target_file]
+                    # Look for function 'call.name' in target_file
+                    for func in target_info['functions']:
+                        if func.name == call.name:
+                             return self._generate_id(repo_name, target_file, func.name, str(func.start_line))
+        
+        return None
+
+    def _find_file_for_module(self, module_name: str, all_files_map: Dict) -> Optional[str]:
+        """
+        Simple heuristic to map module name to file path.
+        'utils' -> ends with 'utils.py'
+        'pkg.mod' -> ends with 'pkg/mod.py'
+        """
+        if not module_name: return None
+        
+        # Normalize module name to path suffix
+        path_suffix = module_name.replace('.', '/') + '.py'
+        path_suffix_java = module_name.replace('.', '/') + '.java'
+        
+        # Search in all files
+        # Prioritize exact match or suffix match
+        # TODO: optimize this with a pre-built index if slow
+        for file_path in all_files_map.keys():
+            if file_path.endswith(path_suffix) or file_path.endswith(path_suffix_java):
+                return file_path
+        
+        return None
 
 
     def get_index_status(self, repo_name: str) -> Optional[Dict[str, Any]]:

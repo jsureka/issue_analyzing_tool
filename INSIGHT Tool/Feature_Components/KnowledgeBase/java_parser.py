@@ -15,7 +15,7 @@ except ImportError:
         "Install with: pip install tree-sitter tree-sitter-java"
     )
 
-from .language_parser import LanguageParser, FunctionInfo, ClassInfo
+from .language_parser import LanguageParser, FunctionInfo, ClassInfo, CallInfo, ImportInfo
 
 logger = logging.getLogger(__name__)
 
@@ -315,7 +315,7 @@ class JavaParser(LanguageParser):
         return classes
 
     
-    def extract_imports(self, tree, source_code: bytes) -> List[str]:
+    def extract_imports(self, tree, source_code: bytes) -> List[ImportInfo]:
         """
         Extract all import statements from the AST
         
@@ -324,7 +324,7 @@ class JavaParser(LanguageParser):
             source_code: Source code as bytes
             
         Returns:
-            List of import statements as strings
+            List of ImportInfo objects
         """
         imports = []
         
@@ -332,7 +332,14 @@ class JavaParser(LanguageParser):
             """Recursively traverse to find import declarations"""
             if node.type == 'import_declaration':
                 import_text = self._get_node_text(node, source_code)
-                imports.append(import_text)
+                # Java import: import com.example.Class; or import static ...
+                # import_text preserves 'import ... ;' ? No, get_node_text gets strict text
+                # We probably want just the package/class name
+                # Child 'name' usually holds it (scoped_identifier)
+                
+                # Simple parsing of the text for now since structure varies (static vs normal)
+                clean_import = import_text.replace('import ', '').replace(';', '').strip()
+                imports.append(ImportInfo(module_name=clean_import))
             
             for child in node.children:
                 traverse(child)
@@ -340,7 +347,7 @@ class JavaParser(LanguageParser):
         traverse(tree.root_node)
         return imports
     
-    def extract_calls(self, tree, source_code: bytes) -> Dict[str, List[str]]:
+    def extract_calls(self, tree, source_code: bytes) -> Dict[str, List[CallInfo]]:
         """
         Extract method call relationships within each method
         
@@ -349,7 +356,7 @@ class JavaParser(LanguageParser):
             source_code: Source code as bytes
             
         Returns:
-            Dictionary mapping method names to lists of called method names
+            Dictionary mapping method names to lists of CallInfo objects
         """
         calls_map = {}
         
@@ -374,12 +381,38 @@ class JavaParser(LanguageParser):
                 # This is a method call
                 if in_method:
                     # Extract the called method name
-                    for child in node.children:
-                        if child.type == 'identifier':
-                            called_name = self._get_node_text(child, source_code)
-                            if called_name not in calls_map.get(in_method, []):
-                                calls_map[in_method].append(called_name)
-                            break
+                    name_node = node.child_by_field_name('name')
+                    obj_node = node.child_by_field_name('object')
+                    
+                    if name_node:
+                        name = self._get_node_text(name_node, source_code)
+                        scope = None
+                        if obj_node:
+                            scope = self._get_node_text(obj_node, source_code)
+                        
+                        # Check existance to avoid dupes? 
+                        # With CallInfo including scope/args, exact dupes might be rare but worth checking name+scope
+                        
+                        # Simplified check
+                        exists = False
+                        if in_method in calls_map:
+                            for c in calls_map[in_method]:
+                                if c.name == name and c.scope == scope:
+                                    exists = True
+                                    break
+                        else:
+                            calls_map[in_method] = []
+                            
+                        if not exists:
+                            # Extract args
+                            args = []
+                            args_node = node.child_by_field_name('arguments')
+                            if args_node:
+                                for child in args_node.children:
+                                    if child.type in ['identifier', 'string_literal', 'decimal_integer_literal']:
+                                         args.append(self._get_node_text(child, source_code))
+                            
+                            calls_map[in_method].append(CallInfo(name=name, scope=scope, args=args))
             
             # Recursively traverse children
             for child in node.children:

@@ -24,7 +24,7 @@ class Config:
     # Models
     DUPLICATE_BR_MODEL_PATH = os.getenv('DUPLICATE_BR_MODEL_PATH', 'models/duplicate_detection')
     SEVERITY_PREDICTION_MODEL_PATH = os.getenv('SEVERITY_PREDICTION_MODEL_PATH', 'models/severity_prediction')
-    BUGLOCALIZATION_MODEL_PATH = os.getenv('BUGLOCALIZATION_MODEL_PATH', 'microsoft/unixcoder-base')
+    BUGLOCALIZATION_MODEL_PATH = os.getenv('BUGLOCALIZATION_MODEL_PATH', 'jinaai/jina-embeddings-v2-base-code')
     
     # Neo4j
     NEO4J_URI = os.getenv('NEO4J_URI', 'bolt://localhost:7687')
@@ -38,9 +38,9 @@ class Config:
     LLM_TEMPERATURE = float(os.getenv('LLM_TEMPERATURE', 0.2))
     
     # Candidate Selection
-    RETRIEVER_TOP_K = int(os.getenv('RETRIEVER_TOP_K', 60))
-    LLM_SELECTION_COUNT = int(os.getenv('LLM_SELECTION_COUNT', 10))
-    LLM_INPUT_LIMIT = int(os.getenv('LLM_INPUT_LIMIT', 20))
+    RETRIEVER_TOP_K = int(os.getenv('RETRIEVER_TOP_K', 20))
+    LLM_SELECTION_COUNT = int(os.getenv('LLM_SELECTION_COUNT', 5))
+    LLM_INPUT_LIMIT = int(os.getenv('LLM_INPUT_LIMIT', 5))
     
     # Paths
     # Use a fixed path for repos instead of tempdir for persistence if needed, 

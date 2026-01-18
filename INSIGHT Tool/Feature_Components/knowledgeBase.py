@@ -43,7 +43,7 @@ _formatter_lock = threading.Lock()
 
 
 
-def _get_embedder(model_name: str = "microsoft/unixcoder-base") -> CodeEmbedder:
+def _get_embedder(model_name: str = "jinaai/jina-embeddings-v2-base-code") -> CodeEmbedder:
     """Get or create embedder instance (Thread-Safe)"""
     global _embedder
     if _embedder is None:
@@ -185,7 +185,7 @@ def BugLocalization(issue_title: str, issue_body: str, repo_owner: str,
 from config import Config
 
 def IndexRepository(repo_path: str, repo_name: str, 
-                   model_name: str = "microsoft/unixcoder-base",
+                   model_name: str = "jinaai/jina-embeddings-v2-base-code",
                    neo4j_uri: str = None,
                    neo4j_user: str = None,
                    neo4j_password: str = None) -> Dict[str, Any]:

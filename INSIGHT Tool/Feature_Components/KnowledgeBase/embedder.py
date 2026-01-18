@@ -19,12 +19,12 @@ class CodeEmbedder:
     _model_cache = {}
     _tokenizer_cache = {}
     
-    def __init__(self, model_name: str = "microsoft/unixcoder-base"):
+    def __init__(self, model_name: str = "jinaai/jina-embeddings-v2-base-code"):
         """
         Initialize the code embedder
         
         Args:
-            model_name: HuggingFace model name (default: UniXcoder)
+            model_name: HuggingFace model name (default: jina-embeddings-v2-base-code)
         """
         self.model_name = model_name
         self.device = self._get_device()
@@ -55,8 +55,8 @@ class CodeEmbedder:
         
         try:
             logger.info(f"Loading model: {self.model_name}")
-            self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
-            self.model = AutoModel.from_pretrained(self.model_name)
+            self.tokenizer = AutoTokenizer.from_pretrained(self.model_name, trust_remote_code=True)
+            self.model = AutoModel.from_pretrained(self.model_name, trust_remote_code=True)
             
             # Move model to device
             self.model.to(self.device)
@@ -78,7 +78,7 @@ class CodeEmbedder:
             self.load_model()
 
     def embed_function(self, signature: str, docstring: Optional[str], body: str, 
-                      max_length: int = 512) -> np.ndarray:
+                      max_length: int = 1024) -> np.ndarray:
         """
         Generate embedding for a single function
         
@@ -86,10 +86,10 @@ class CodeEmbedder:
             signature: Function signature (def line)
             docstring: Function docstring (optional)
             body: Full function body
-            max_length: Maximum token length
+            max_length: Maximum token length (default 8192)
             
         Returns:
-            Normalized embedding vector (768-dim for UniXcoder/GraphCodeBERT)
+            Normalized embedding vector (768-dim)
         """
         self._ensure_model_loaded()
         
@@ -97,9 +97,8 @@ class CodeEmbedder:
         parts = [signature]
         if docstring:
             parts.append(docstring)
-        # Limit body length to avoid token overflow
-        if len(body) > 2000:  # Rough character limit
-            body = body[:2000]
+        
+        # Jina has 8k context, we can usually include the whole body
         parts.append(body)
         
         text = "\n".join(parts)
@@ -109,7 +108,7 @@ class CodeEmbedder:
             inputs = self.tokenizer(
                 text,
                 max_length=max_length,
-                padding='max_length',
+                padding=True,
                 truncation=True,
                 return_tensors='pt'
             )
@@ -120,8 +119,21 @@ class CodeEmbedder:
             # Generate embedding
             with torch.no_grad():
                 outputs = self.model(**inputs)
-                # Use [CLS] token embedding (first token)
-                embedding = outputs.last_hidden_state[:, 0, :].cpu().numpy()
+                # Jina V2 uses mean pooling over non-padded tokens for optimal performance, 
+                # but [CLS] (index 0) is also supported and often sufficient.
+                # However, for Jina V2 specifically, the recommendation is mean pooling.
+                # Let's check if the model has a pooler or we do it manually.
+                # Standard AutoModel output usually has last_hidden_state.
+                
+                # Manual Mean Pooling for better quality on long docs
+                last_hidden_state = outputs.last_hidden_state
+                attention_mask = inputs['attention_mask']
+                
+                # Mask padding
+                input_mask_expanded = attention_mask.unsqueeze(-1).expand(last_hidden_state.size()).float()
+                sum_embeddings = torch.sum(last_hidden_state * input_mask_expanded, 1)
+                sum_mask = torch.clamp(input_mask_expanded.sum(1), min=1e-9)
+                embedding = (sum_embeddings / sum_mask).cpu().numpy()
             
             # Normalize
             embedding = embedding / np.linalg.norm(embedding)
@@ -134,7 +146,7 @@ class CodeEmbedder:
             return np.zeros(768, dtype=np.float32)
 
     def embed_batch(self, texts: List[str], batch_size: int = 32, 
-                   max_length: int = 512) -> np.ndarray:
+                   max_length: int = 1024) -> np.ndarray:
         """
         Generate embeddings for a batch of texts
         
@@ -162,7 +174,7 @@ class CodeEmbedder:
                 inputs = self.tokenizer(
                     batch_texts,
                     max_length=max_length,
-                    padding='max_length',
+                    padding=True,
                     truncation=True,
                     return_tensors='pt'
                 )
@@ -172,9 +184,50 @@ class CodeEmbedder:
                 
                 # Generate embeddings
                 with torch.no_grad():
+                    # SANITY CHECK: Ensure input dimensions match before passing to model
+                    if 'input_ids' in inputs and 'attention_mask' in inputs:
+                        ids_shape = inputs['input_ids'].shape
+                        mask_shape = inputs['attention_mask'].shape
+                        
+                        if ids_shape[0] != mask_shape[0] or ids_shape[1] != mask_shape[1]:
+                            logger.warning(f"Tensor mismatch detected! IDs: {ids_shape}, Mask: {mask_shape}. Fixing...")
+                            
+                            # Fix Batch Dimension
+                            if mask_shape[0] == 1 and ids_shape[0] > 1:
+                                inputs['attention_mask'] = inputs['attention_mask'].expand(ids_shape[0], -1)
+                            
+                            # Fix Sequence Dimension
+                            current_mask = inputs['attention_mask']
+                            if current_mask.size(1) > ids_shape[1]:
+                                inputs['attention_mask'] = current_mask[:, :ids_shape[1]]
+                            elif current_mask.size(1) < ids_shape[1]:
+                                padding = torch.zeros((current_mask.size(0), ids_shape[1] - current_mask.size(1)), 
+                                                      device=current_mask.device, dtype=current_mask.dtype)
+                                inputs['attention_mask'] = torch.cat([current_mask, padding], dim=1)
+
                     outputs = self.model(**inputs)
-                    # Use [CLS] token embeddings
-                    embeddings = outputs.last_hidden_state[:, 0, :].cpu().numpy()
+                    # Use mean pooling
+                    last_hidden_state = outputs.last_hidden_state
+                    attention_mask = inputs['attention_mask']
+                    
+                    # Force alignment
+                    min_seq_len = min(attention_mask.size(1), last_hidden_state.size(1))
+                    attention_mask = attention_mask[:, :min_seq_len]
+                    last_hidden_state = last_hidden_state[:, :min_seq_len, :]
+
+                    if attention_mask.size(0) != last_hidden_state.size(0):
+                         if attention_mask.size(0) == 1:
+                             attention_mask = attention_mask.expand(last_hidden_state.size(0), -1)
+
+                    try:
+                        input_mask_expanded = attention_mask.unsqueeze(-1).expand(last_hidden_state.size()).float()
+                    except Exception as e:
+                        logger.error(f"CRASH DEBUG: Mask: {attention_mask.shape}, State: {last_hidden_state.shape}")
+                        raise e
+
+                    sum_embeddings = torch.sum(last_hidden_state * input_mask_expanded, 1)
+                    sum_mask = torch.clamp(input_mask_expanded.sum(1), min=1e-9)
+                    embeddings = (sum_embeddings / sum_mask).cpu().numpy()
                 
                 # Normalize each embedding
                 norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
@@ -197,7 +250,7 @@ class CodeEmbedder:
         return result
     
     def embed_issue(self, issue_title: str, issue_body: str, 
-                   max_length: int = 512) -> np.ndarray:
+                   max_length: int = 1024) -> np.ndarray:
         """
         Generate embedding for an issue (title + body)
         

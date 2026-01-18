@@ -281,11 +281,11 @@ class GraphStore:
     
     def create_calls_relationship(self, caller_id: str, callee_name: str) -> bool:
         """
-        Create a CALLS relationship between functions
+        Create a CALLS relationship between functions using name matching (DEPRECATED/FALLBACK)
         
         Args:
             caller_id: Calling function ID
-            callee_name: Called function name (may not have full ID)
+            callee_name: Called function name
             
         Returns:
             True if successful
@@ -294,7 +294,6 @@ class GraphStore:
         
         try:
             with self.driver.session() as session:
-                # Try to find callee by name
                 query = """
                 MATCH (caller:Function {id: $caller_id})
                 MATCH (callee:Function {name: $callee_name})
@@ -305,6 +304,32 @@ class GraphStore:
                 return True
         except Exception as e:
             logger.debug(f"Could not create CALLS relationship: {e}")
+            return False
+
+    def create_call_by_id(self, caller_id: str, callee_id: str) -> bool:
+        """
+        Create a CALLS relationship between specific functions by ID
+        
+        Args:
+            caller_id: Calling function ID
+            callee_id: Called function ID
+            
+        Returns:
+            True if successful
+        """
+        self._ensure_connected()
+        
+        try:
+            with self.driver.session() as session:
+                query = """
+                MATCH (caller:Function {id: $caller_id})
+                MATCH (callee:Function {id: $callee_id})
+                CREATE (caller)-[:CALLS]->(callee)
+                """
+                session.run(query, caller_id=caller_id, callee_id=callee_id)
+                return True
+        except Exception as e:
+            logger.debug(f"Could not create CALLS relationship by ID: {e}")
             return False
     
     def create_imports_relationship(self, file_id: str, imported_path: str) -> bool:
@@ -564,21 +589,82 @@ class GraphStore:
         OPTIONAL MATCH (caller:Function)-[:CALLS]->(f)
         OPTIONAL MATCH (f)-[:CALLS]->(callee:Function)
         RETURN f.id as func_id, 
-               collect(DISTINCT caller.name) as callers,
-               collect(DISTINCT callee.name) as callees
+               collect(DISTINCT caller) as callers,
+               collect(DISTINCT callee) as callees
         """
         try:
             with self.driver.session() as session:
                 result = session.run(query, function_ids=function_ids)
                 neighbors = {}
                 for record in result:
+                    # Convert Neo4j nodes to dicts
+                    callers_data = []
+                    for node in record['callers']:
+                        if node:
+                            d = dict(node)
+                            if 'id' not in d: d['id'] = node.element_id
+                            callers_data.append(d)
+
+                    callees_data = []
+                    for node in record['callees']:
+                        if node:
+                            d = dict(node)
+                            if 'id' not in d: d['id'] = node.element_id
+                            callees_data.append(d)
+
                     neighbors[record['func_id']] = {
-                        'callers': [c for c in record['callers'] if c],
-                        'callees': [c for c in record['callees'] if c]
+                        'callers': callers_data,
+                        'callees': callees_data
                     }
                 return neighbors
         except Exception as e:
             logger.error(f"Failed to get function neighbors: {e}")
+            return {}
+
+    def get_function_neighbors_with_paths(self, function_ids: List[str]) -> Dict[str, Dict[str, List[Dict[str, Any]]]]:
+        """
+        Get immediate neighbors with file paths for hydration.
+        
+        Args:
+            function_ids: List of function IDs
+            
+        Returns:
+            Dict mapping function_id to {'callers': [{id, name, path, ...}], 'callees': []}
+        """
+        self._ensure_connected()
+        # Complex query to get path from File node
+        query = """
+        MATCH (f:Function)
+        WHERE f.id IN $function_ids
+        
+        // Callers
+        OPTIONAL MATCH (caller:Function)-[:CALLS]->(f)
+        OPTIONAL MATCH (caller)<-[:CONTAINS*1..2]-(c_file:File)
+        
+        // Callees
+        OPTIONAL MATCH (f)-[:CALLS]->(callee:Function)
+        OPTIONAL MATCH (callee)<-[:CONTAINS*1..2]-(ce_file:File)
+        
+        RETURN f.id as func_id, 
+               collect(DISTINCT {id: caller.id, name: caller.name, signature: caller.signature, path: c_file.path, start_line: caller.start_line, end_line: caller.end_line}) as callers,
+               collect(DISTINCT {id: callee.id, name: callee.name, signature: callee.signature, path: ce_file.path, start_line: callee.start_line, end_line: callee.end_line}) as callees
+        """
+        try:
+             with self.driver.session() as session:
+                result = session.run(query, function_ids=function_ids)
+                neighbors = {}
+                for record in result:
+                    # Filter out nulls (if no callers/callees)
+                    callers = [c for c in record['callers'] if c and c.get('id')]
+                    callees = [c for c in record['callees'] if c and c.get('id')]
+                    
+                    neighbors[record['func_id']] = {
+                        'callers': callers,
+                        'callees': callees
+                    }
+                return neighbors
+        except Exception as e:
+            logger.error(f"Failed to get neighbors with paths: {e}")
             return {}
 
     def get_context_subgraph(self, function_ids: List[str], depth: int = 1) -> str:

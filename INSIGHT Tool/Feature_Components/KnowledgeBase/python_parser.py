@@ -16,7 +16,7 @@ except ImportError:
         "Install with: pip install tree-sitter tree-sitter-python"
     )
 
-from .language_parser import LanguageParser, FunctionInfo, ClassInfo
+from .language_parser import LanguageParser, FunctionInfo, ClassInfo, CallInfo, ImportInfo
 
 logger = logging.getLogger(__name__)
 
@@ -251,7 +251,7 @@ class PythonParser(LanguageParser):
         logger.info(f"Extracted {len(classes)} classes from {file_path}")
         return classes
 
-    def extract_imports(self, tree, source_code: bytes) -> List[str]:
+    def extract_imports(self, tree, source_code: bytes) -> List[ImportInfo]:
         """
         Extract all import statements from the AST
         
@@ -260,7 +260,7 @@ class PythonParser(LanguageParser):
             source_code: Source code as bytes
             
         Returns:
-            List of imported module names
+            List of ImportInfo objects
         """
         imports = []
         
@@ -268,21 +268,67 @@ class PythonParser(LanguageParser):
             """Recursively traverse to find import statements"""
             if node.type == 'import_statement':
                 # import module
-                import_text = self._get_node_text(node, source_code)
-                imports.append(import_text)
+                # import module as alias
+                for child in node.children:
+                    if child.type == 'dotted_name':
+                        name = self._get_node_text(child, source_code)
+                        imports.append(ImportInfo(module_name=name))
+                    elif child.type == 'aliased_import':
+                        # name as alias
+                        name_node = child.child_by_field_name('name')
+                        alias_node = child.child_by_field_name('alias')
+                        name = self._get_node_text(name_node, source_code)
+                        alias = self._get_node_text(alias_node, source_code)
+                        imports.append(ImportInfo(module_name=name, alias=alias))
             
             elif node.type == 'import_from_statement':
-                # from module import something
-                import_text = self._get_node_text(node, source_code)
-                imports.append(import_text)
-            
+                # from module import name
+                module_name = None
+                module_node = node.child_by_field_name('module_name')
+                if module_node:
+                    module_name = self._get_node_text(module_node, source_code)
+                else:
+                    # from . import name (relative import)
+                    # For now, treat '.' as module name or handle specifically?
+                    # Let's verify children for '.'
+                    for child in node.children:
+                        if self._get_node_text(child, source_code) == '.':
+                            module_name = "."
+                            break
+                
+                imported_elements = []
+                for child in node.children:
+                    if child.type == 'dotted_name' and child != module_node:
+                         # This handles 'import x, y' in from statement? No, structure is usually aliased_import or identifier
+                         pass
+                    elif child.type == 'aliased_import':
+                         name_node = child.child_by_field_name('name')
+                         alias_node = child.child_by_field_name('alias')
+                         name = self._get_node_text(name_node, source_code)
+                         alias = self._get_node_text(alias_node, source_code)
+                         # We treat this as a separate import for simplicity, or we list it?
+                         # ImportInfo structure suggests one module, multiple elements.
+                         # But aliases make it tricky. 
+                         # Let's flatten: from M import A as B -> ImportInfo(M, alias=B, imported=[A])?
+                         # Or just ImportInfo(M, alias=None, imported=[A]) and handle alias resolution elsewhere?
+                         # Ideally: resolver needs {alias: (module, name)}.
+                         # Let's emit one ImportInfo per imported item if it has an alias, or group them?
+                         # Simpler: One ImportInfo per statement if possible, but distinct aliases require distinct objects if we strictly map alias->module.
+                         # Actually for `from X import A as B`, B is an alias for X.A
+                         imports.append(ImportInfo(module_name=module_name, alias=alias, imported_elements=[name]))
+                    elif child.type == 'identifier' and child != module_node:
+                         name = self._get_node_text(child, source_code)
+                         if name != 'from' and name != 'import':
+                             # Check if this identifier is part of the import list
+                             imports.append(ImportInfo(module_name=module_name, imported_elements=[name]))
+
             for child in node.children:
                 traverse(child)
         
         traverse(tree.root_node)
         return imports
     
-    def extract_calls(self, tree, source_code: bytes) -> Dict[str, List[str]]:
+    def extract_calls(self, tree, source_code: bytes) -> Dict[str, List[CallInfo]]:
         """
         Extract function calls and references within each function
         
@@ -291,12 +337,12 @@ class PythonParser(LanguageParser):
             source_code: Source code as bytes
             
         Returns:
-            Dictionary mapping function names to lists of called/referenced function names
+            Dictionary mapping function names to lists of CallInfo objects
         """
         calls_map = {}
         
         def traverse(node, in_function: Optional[str] = None):
-            """Recursively traverse to find function calls and references"""
+            """Recursively traverse to find function calls"""
             
             if node.type == 'function_definition':
                 # Extract function name
@@ -311,33 +357,43 @@ class PythonParser(LanguageParser):
                 
                 if func_name and body_node:
                     calls_map[func_name] = []
-                    # Traverse ONLY the function body to avoid capturing params
+                    # Traverse ONLY the function body
                     traverse(body_node, func_name)
-                return  # Don't traverse children again (we handled body manually)
+                return
             
             elif node.type == 'call':
-                # This is a function call
                 if in_function:
-                    # Extract the called function name
-                    for child in node.children:
-                        if child.type == 'identifier':
-                            called_name = self._get_node_text(child, source_code)
-                            if called_name not in calls_map.get(in_function, []):
-                                calls_map[in_function].append(called_name)
-                            break
-                        elif child.type == 'attribute':
-                            # Handle method calls like obj.method()
-                            called_name = self._get_node_text(child, source_code)
-                            if called_name not in calls_map.get(in_function, []):
-                                calls_map[in_function].append(called_name)
-                            break
-            
-            elif node.type == 'identifier':
-                # This is a potential function reference (e.g. passed as argument)
-                if in_function:
-                    name = self._get_node_text(node, source_code)
-                    if name not in calls_map.get(in_function, []):
-                        calls_map[in_function].append(name)
+                    # Analyze the function node being called
+                    func_node = node.child_by_field_name('function')
+                    if func_node:
+                        call_info = None
+                        
+                        if func_node.type == 'identifier':
+                            # Simple call: func()
+                            name = self._get_node_text(func_node, source_code)
+                            call_info = CallInfo(name=name, scope=None)
+                            
+                        elif func_node.type == 'attribute':
+                            # Method call: obj.method()
+                            obj_node = func_node.child_by_field_name('object')
+                            attr_node = func_node.child_by_field_name('attribute')
+                            
+                            if obj_node and attr_node:
+                                scope = self._get_node_text(obj_node, source_code)
+                                name = self._get_node_text(attr_node, source_code)
+                                call_info = CallInfo(name=name, scope=scope)
+                        
+                        if call_info:
+                            # Extract arguments (simple check for now)
+                            args_node = node.child_by_field_name('arguments')
+                            if args_node:
+                                args = []
+                                for child in args_node.children:
+                                    if child.type in ['identifier', 'string', 'integer']:
+                                        args.append(self._get_node_text(child, source_code))
+                                call_info.args = args
+                                
+                            calls_map[in_function].append(call_info)
 
             # Recursively traverse children
             for child in node.children:

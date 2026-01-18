@@ -95,17 +95,26 @@ def parse_diff(diff_text):
         if hunk_match:
             current_line_num = int(hunk_match.group(1))
             context = hunk_match.group(2)
-            # Extract class and function names from context
             extract_entities(context, current_language, changed_classes, changed_functions)
             continue
 
-        # Track changed line numbers
+        # Track changed line numbers and scan for entities in the body
         if line.startswith('+') and not line.startswith('+++'):
             changed_lines.append(current_line_num)
             current_line_num += 1
-        elif line.startswith(' ') or (line.startswith('-') and not line.startswith('---')):
-            if not line.startswith('-'):
-                current_line_num += 1
+            # Check for new definitions in added lines
+            extract_entities(line[1:], current_language, changed_classes, changed_functions)
+            
+        elif line.startswith(' '):
+            current_line_num += 1
+            # Check for context definitions (e.g. knowing we are inside a function)
+            # This is heuristic but helps if header missed it.
+            extract_entities(line[1:], current_language, changed_classes, changed_functions)
+            
+        elif line.startswith('-') and not line.startswith('---'):
+            # Deleted lines
+            # logic doesn't change current_line_num for deleted lines in target file
+            pass
                 
     return list(changed_files), list(changed_classes), list(changed_functions), changed_lines
 
@@ -219,18 +228,28 @@ def process_language(lang_code, num_repos=3, min_issues=10):
     valid_repos_list = [k for k, v in repo_issues.items() if len(v) >= min_issues]
     print(f"Found {len(valid_repos_list)} repositories with >= {min_issues} issues.")
     
-    # Sort by file count (ascending) - no API calls needed!
+    # Filter by File Count (50 < count < 200)
+    # Also prioritize 50-100 range if possible, but strict range is 50-200 for now.
+    size_filtered_repos = []
+    for r in valid_repos_list:
+        fc = repo_metadata[r]['file_count']
+        if 50 < fc < 200:
+            size_filtered_repos.append(r)
+            
+    print(f"Filtered down to {len(size_filtered_repos)} repos with 50 < files < 200 (from {len(valid_repos_list)} valid candidate repos)")
+    
+    # Sort by file count (ascending)
     sorted_repos_by_size = sorted(
-        valid_repos_list,
+        size_filtered_repos,
         key=lambda r: repo_metadata[r]['file_count']
     )
     
-    print(f"\nSmallest repositories by file count:")
+    print(f"\nSmallest repositories by file count (Targeting {num_repos}):")
     for repo in sorted_repos_by_size[:num_repos]:
         meta = repo_metadata[repo]
         print(f"  {repo}: Files={meta['file_count']}, Lines={meta['lines_count']}, Stars={meta['stars']}")
     
-    # Take top N smallest
+    # Take top N
     selected_repo_names = sorted_repos_by_size[:num_repos]
     
     extracted_data = []
@@ -240,7 +259,8 @@ def process_language(lang_code, num_repos=3, min_issues=10):
         meta = repo_metadata[repo_name]
         print(f"\n  Extracting from {repo_name} (Files: {meta['file_count']}, Lines: {meta['lines_count']})...")
         
-        # Take up to 10 issues
+        # Take up to 10 issues (user didn't specify max per repo, but kept it reasonable)
+        # User said "greater than or equal 3 issues", didn't specify max.
         selected_issues = issues[:10] 
         
         for issue in selected_issues:
@@ -260,8 +280,10 @@ def process_language(lang_code, num_repos=3, min_issues=10):
                 'Changed Files': str(changed_files),
                 'Changed Classes': str(changed_classes),
                 'Changed Functions': str(changed_funcs),
-                'Changed Lines': str(changed_lines)[:1000], # Truncate if too long
-                'Diff URL': issue.get('diff_url')
+                'Changed Lines': str(changed_lines)[:1000],
+                'Diff URL': issue.get('diff_url'),
+                'Base SHA': issue.get('base_sha'),
+                'Head SHA': issue.get('head_sha')
             }
             extracted_data.append(row)
             
@@ -271,55 +293,43 @@ def main():
     output_file = 'test_dataset.xlsx'
     csv_fallback = 'test_dataset.csv'
     
-    # Load existing data if file exists
-    existing_data = []
-    existing_issue_urls = set()
-    
+    # User requested to RECREATE the dataset. We do NOT load existing data.
+    # But we might want to backup just in case.
     if os.path.exists(output_file):
-        print(f"Found existing dataset: {output_file}")
+        from datetime import datetime
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        backup_file = f'test_dataset_backup_{timestamp}.xlsx'
         try:
-            existing_df = pd.read_excel(output_file)
-            existing_data = existing_df.to_dict('records')
-            existing_issue_urls = set(existing_df['Issue URL'].dropna().values)
-            print(f"Loaded {len(existing_data)} existing rows")
-            
-            # Create backup
-            from datetime import datetime
-            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            backup_file = f'test_dataset_backup_{timestamp}.xlsx'
-            existing_df.to_excel(backup_file, index=False)
-            print(f"Created backup: {backup_file}")
+           # simple rename
+           os.rename(output_file, backup_file)
+           print(f"Backed up existing dataset to {backup_file} before recreation.")
         except Exception as e:
-            print(f"Could not load existing Excel file: {e}")
-            # Try CSV fallback
-            if os.path.exists(csv_fallback):
-                print(f"Trying to load from CSV: {csv_fallback}")
-                existing_df = pd.read_csv(csv_fallback)
-                existing_data = existing_df.to_dict('records')
-                existing_issue_urls = set(existing_df['Issue URL'].dropna().values)
-                print(f"Loaded {len(existing_data)} existing rows from CSV")
+           print(f"Warning: Could not backup existing file: {e}")
+
+    all_data = []
     
-    all_data = existing_data.copy()
+    # Process Python with new criteria: 20 repos, min 3 issues
+    # Note: process_language defaults were 3, 10. We pass 20, 3.
+    py_data = process_language('py', num_repos=20, min_issues=3)
     
-    # Python
-    py_data = process_language('py')
+    existing_issue_urls = set()
     new_py_count = 0
     for row in py_data:
         if row['Issue URL'] not in existing_issue_urls:
             all_data.append(row)
             existing_issue_urls.add(row['Issue URL'])
             new_py_count += 1
-    print(f"Added {new_py_count} new Python issues (skipped {len(py_data) - new_py_count} duplicates)")
+    print(f"Added {new_py_count} Python issues.")
     
-    # Java
-    java_data = process_language('java')
+    # Process Java with new criteria
+    java_data = process_language('java', num_repos=20, min_issues=3)
     new_java_count = 0
     for row in java_data:
         if row['Issue URL'] not in existing_issue_urls:
             all_data.append(row)
             existing_issue_urls.add(row['Issue URL'])
             new_java_count += 1
-    print(f"Added {new_java_count} new Java issues (skipped {len(java_data) - new_java_count} duplicates)")
+    print(f"Added {new_java_count} Java issues.")
     
     if not all_data:
         print("No data to save!")
@@ -327,7 +337,7 @@ def main():
 
     df = pd.DataFrame(all_data)
     
-    print(f"\nSaving {len(df)} total rows ({len(existing_data)} existing + {new_py_count + new_java_count} new) to {output_file}...")
+    print(f"\nSaving {len(df)} total rows to {output_file}...")
     try:
         df.to_excel(output_file, index=False)
         print("Done!")

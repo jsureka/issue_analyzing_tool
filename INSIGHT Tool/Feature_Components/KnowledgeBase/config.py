@@ -6,9 +6,9 @@ import os
 from pathlib import Path
 
 # Model Configuration
-DEFAULT_MODEL_NAME = "microsoft/unixcoder-base"
+DEFAULT_MODEL_NAME = "jinaai/jina-embeddings-v2-base-code"
 EMBEDDING_DIMENSION = 768
-MAX_TOKEN_LENGTH = 512
+MAX_TOKEN_LENGTH = 1024
 BATCH_SIZE = 32
 
 # Storage Paths
