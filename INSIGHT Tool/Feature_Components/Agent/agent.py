@@ -31,6 +31,11 @@ class AgentState(TypedDict):
     candidate_functions: List[Dict] # Accumulated candidates
     selected_functions: List[Dict]  # Final selection
     
+    # Patch generation (optional)
+    generate_patch: bool  # Flag to enable/disable patch generation
+    patch: str            # Generated patch output (includes CoT reasoning)
+    patch_reasoning: Dict[str, Any]  # Structured CoT reasoning steps
+    
     # Token tracking
     token_usage: Dict[str, int]
     start_time: float
@@ -39,7 +44,17 @@ class AgentState(TypedDict):
 class BugLocalizationAgent:
     """
     Agentic RAG for Bug Localization using LangGraph.
-    Orchestrates Planner -> Retriever -> Expander -> Selector.
+    Orchestrates Planner -> Retriever -> Expander -> Generator -> (optional) Patch Generator.
+    
+    Patch Generation Methodology:
+        Based on "ThinkRepair: Self-Directed Automated Program Repair" (Yin et al., ISSTA 2024)
+        and "Structured Chain-of-Thought Prompting for Code Generation" (Li et al., TOSEM 2025).
+        Uses a 5-step Chain-of-Thought reasoning process:
+        1. Define Repair Objective and Constraints
+        2. Evaluate Repair Strategies
+        3. Design Minimal Patch
+        4. Verify Correctness
+        5. Assess Quality and Impact
     """
     
     def __init__(self, repo_name: str, repo_dir: str):
@@ -143,6 +158,7 @@ class BugLocalizationAgent:
         workflow.add_node("retriever", self.retriever_node)
         workflow.add_node("expander", self.expander_node)
         workflow.add_node("generator", self.generator_node)
+        workflow.add_node("patch_generator", self.patch_generator_node)
         
         # Set entry point
         workflow.set_entry_point("planner")
@@ -151,9 +167,21 @@ class BugLocalizationAgent:
         workflow.add_edge("planner", "retriever")
         workflow.add_edge("retriever", "expander")
         workflow.add_edge("expander", "generator")
-        workflow.add_edge("generator", END)
+        
+        # Conditional edge: generator -> patch_generator OR END
+        def should_generate_patch(state: AgentState) -> str:
+            if state.get("generate_patch", False):
+                return "patch_generator"
+            return END
+        
+        workflow.add_conditional_edges("generator", should_generate_patch, {
+            "patch_generator": "patch_generator",
+            END: END
+        })
+        workflow.add_edge("patch_generator", END)
         
         return workflow.compile()
+
 
     # --- Nodes ---
     
@@ -600,10 +628,231 @@ class BugLocalizationAgent:
         state['token_usage']['output_tokens'] += output_tokens
         state['token_usage']['total_tokens'] += input_tokens + output_tokens
 
-    def localize(self, issue_title: str, issue_body: str) -> tuple[List[Dict], List[Dict], Dict]:
+    def patch_generator_node(self, state: AgentState) -> Dict:
+        """
+        Chain-of-Thought Patch Generator Node.
+        
+        Implements structured reasoning for patch generation based on:
+        - ThinkRepair (Yin et al., ISSTA 2024) - Self-directed CoT reasoning
+        - SCoT (Li et al., TOSEM 2025) - Structured intermediate reasoning
+        
+        5-Step Process:
+        1. Define Repair Objective and Constraints
+        2. Evaluate Repair Strategies  
+        3. Design Minimal Patch
+        4. Verify Correctness
+        5. Assess Quality and Impact
+        """
+        logger.info("--- Patch Generator Node (Chain-of-Thought) ---")
+        
+        selected_functions = state.get('selected_functions', [])
+        if not selected_functions:
+            logger.warning("No selected functions for patch generation")
+            return {
+                "patch": "",
+                "patch_reasoning": {},
+                "messages": [AIMessage(content="No bug locations identified for patch generation.")]
+            }
+        
+        # Use top candidate for patch generation
+        top_func = selected_functions[0]
+        target_file = top_func.get('file_path') or top_func.get('path', '')
+        target_code = self._get_source_code(top_func)
+        analysis = top_func.get('analysis', '')
+        
+        issue_text = f"Title: {state['issue_title']}\nDescription: {state['issue_body']}"
+        
+        # Build the Chain-of-Thought prompt
+        system_msg = """You are an expert software engineer specializing in Automated Program Repair.
+Your task is to generate a patch using a structured Chain-of-Thought (CoT) process.
+
+Methodology based on:
+- ThinkRepair (Yin et al., ISSTA 2024) - Self-directed reasoning for program repair
+- Structured Chain-of-Thought (Li et al., TOSEM 2025) - Structured intermediate reasoning
+
+You MUST follow this 5-step reasoning process and output a JSON object:
+
+{
+  "step1_objective": {
+    "think": "What must be fixed and what constraints apply?",
+    "objective": "Description of what needs to be fixed",
+    "constraints": ["list of constraints"],
+    "codebase_patterns": "Relevant patterns from the codebase to follow"
+  },
+  "step2_strategy": {
+    "think": "What are the possible repair approaches?",
+    "strategies": [
+      {"name": "Strategy Name", "pros": "advantages", "cons": "disadvantages"}
+    ],
+    "selected": "Chosen strategy",
+    "rationale": "Why this strategy best fits"
+  },
+  "step3_patch_design": {
+    "think": "What is the smallest correct change?",
+    "location": "File and line numbers",
+    "change_description": "Description of the change",
+    "lines_added": 0,
+    "lines_removed": 0
+  },
+  "step4_verification": {
+    "think": "Does this fix all cases?",
+    "bug_case": "How it fixes the reported bug",
+    "normal_cases": "Confirms normal behavior is preserved",
+    "edge_cases": "How edge cases are handled"
+  },
+  "step5_quality": {
+    "minimality": "1-5 score with justification",
+    "consistency": "1-5 score with justification",
+    "breaking_changes": "none or description",
+    "affected_components": ["list of affected code"]
+  },
+  "patch": {
+    "file": "path/to/file",
+    "diff": "Unified diff format patch",
+    "commit_message": "Concise commit message"
+  }
+}
+
+IMPORTANT: Output ONLY valid JSON. No markdown formatting outside the JSON.
+"""
+        
+        prompt = f"""Issue:
+{issue_text}
+
+Bug Analysis:
+{analysis}
+
+Target File: {target_file}
+Target Code:
+```
+{target_code}
+```
+
+Generate the Chain-of-Thought patch repair JSON following the 5-step process."""
+
+        response = self.llm_service.get_response(prompt, system_message=system_msg, json_mode=True)
+        
+        # Parse the CoT response
+        patch_reasoning = {}
+        formatted_patch = ""
+        
+        try:
+            # Extract JSON
+            start_idx = response.find('{')
+            if start_idx == -1:
+                raise json.JSONDecodeError("No JSON found", response, 0)
+            
+            data, _ = json.JSONDecoder().raw_decode(response[start_idx:])
+            patch_reasoning = data
+            
+            # Format the output with CoT reasoning as comments
+            formatted_patch = self._format_patch_with_cot(data, target_file)
+            
+            logger.info("Patch generation complete with CoT reasoning")
+            
+        except Exception as e:
+            logger.error(f"Failed to parse patch generator response: {e}")
+            logger.error(f"Raw response: {response}")
+            formatted_patch = f"# Error generating patch: {e}\n# Raw response:\n{response}"
+        
+        # Update token usage
+        self._update_tokens(state, len(prompt.split()), len(response.split()))
+        
+        return {
+            "patch": formatted_patch,
+            "patch_reasoning": patch_reasoning,
+            "messages": [AIMessage(content="Generated patch with Chain-of-Thought reasoning.")]
+        }
+
+    def _format_patch_with_cot(self, data: Dict[str, Any], target_file: str) -> str:
+        """
+        Format the patch output with Chain-of-Thought reasoning as structured comments.
+        
+        This format allows humans to understand the reasoning behind each repair decision,
+        following the transparency principles of ThinkRepair (Yin et al., ISSTA 2024).
+        """
+        lines = []
+        lines.append("=" * 78)
+        lines.append("CHAIN-OF-THOUGHT PATCH REASONING")
+        lines.append("Methodology: ThinkRepair (Yin et al., ISSTA 2024) + SCoT (Li et al., 2025)")
+        lines.append("=" * 78)
+        lines.append("")
+        
+        # Step 1: Objective
+        step1 = data.get('step1_objective', {})
+        lines.append("STEP 1: REPAIR OBJECTIVE AND CONSTRAINTS")
+        lines.append(f"Think: {step1.get('think', 'N/A')}")
+        lines.append(f"- Objective: {step1.get('objective', 'N/A')}")
+        constraints = step1.get('constraints', [])
+        if constraints:
+            lines.append(f"- Constraints: {', '.join(constraints)}")
+        lines.append(f"- Codebase Patterns: {step1.get('codebase_patterns', 'N/A')}")
+        lines.append("")
+        
+        # Step 2: Strategy
+        step2 = data.get('step2_strategy', {})
+        lines.append("STEP 2: EVALUATE REPAIR STRATEGIES")
+        lines.append(f"Think: {step2.get('think', 'N/A')}")
+        strategies = step2.get('strategies', [])
+        for s in strategies:
+            lines.append(f"  | {s.get('name', '?')} | Pros: {s.get('pros', '?')} | Cons: {s.get('cons', '?')}")
+        lines.append(f"Selected: {step2.get('selected', 'N/A')}")
+        lines.append(f"Rationale: {step2.get('rationale', 'N/A')}")
+        lines.append("")
+        
+        # Step 3: Patch Design
+        step3 = data.get('step3_patch_design', {})
+        lines.append("STEP 3: DESIGN MINIMAL PATCH")
+        lines.append(f"Think: {step3.get('think', 'N/A')}")
+        lines.append(f"- Location: {step3.get('location', 'N/A')}")
+        lines.append(f"- Change: {step3.get('change_description', 'N/A')}")
+        lines.append(f"- Lines: +{step3.get('lines_added', 0)} / -{step3.get('lines_removed', 0)}")
+        lines.append("")
+        
+        # Step 4: Verification
+        step4 = data.get('step4_verification', {})
+        lines.append("STEP 4: VERIFY CORRECTNESS")
+        lines.append(f"Think: {step4.get('think', 'N/A')}")
+        lines.append(f"✓ Bug case: {step4.get('bug_case', 'N/A')}")
+        lines.append(f"✓ Normal cases: {step4.get('normal_cases', 'N/A')}")
+        lines.append(f"✓ Edge cases: {step4.get('edge_cases', 'N/A')}")
+        lines.append("")
+        
+        # Step 5: Quality
+        step5 = data.get('step5_quality', {})
+        lines.append("STEP 5: ASSESS QUALITY AND IMPACT")
+        lines.append(f"- Minimality: {step5.get('minimality', 'N/A')}")
+        lines.append(f"- Consistency: {step5.get('consistency', 'N/A')}")
+        lines.append(f"- Breaking Changes: {step5.get('breaking_changes', 'none')}")
+        affected = step5.get('affected_components', [])
+        if affected:
+            lines.append(f"- Affected Components: {', '.join(affected)}")
+        lines.append("")
+        
+        # Patch
+        patch_data = data.get('patch', {})
+        lines.append("=" * 78)
+        lines.append("PATCH")
+        lines.append("=" * 78)
+        lines.append(f"File: {patch_data.get('file', target_file)}")
+        lines.append(f"Commit Message: {patch_data.get('commit_message', 'Fix bug')}")
+        lines.append("")
+        lines.append(patch_data.get('diff', '# No diff generated'))
+        
+        return "\n".join(lines)
+
+    def localize(self, issue_title: str, issue_body: str, generate_patch: bool = False) -> tuple[List[Dict], List[Dict], Dict, str, Dict]:
         """
         Main entry point for localization.
-        Returns: (selected_funcs, all_candidates, token_usage)
+        
+        Args:
+            issue_title: Issue title
+            issue_body: Issue body/description
+            generate_patch: If True, run the chain-of-thought patch generator after localization
+            
+        Returns: 
+            (selected_funcs, all_candidates, token_usage, patch, patch_reasoning)
+            - patch and patch_reasoning will be empty if generate_patch is False
         """
         start_time = time.time()
         initial_state: AgentState = {
@@ -614,6 +863,9 @@ class BugLocalizationAgent:
             "current_plan": "",
             "candidate_functions": [],
             "selected_functions": [],
+            "generate_patch": generate_patch,
+            "patch": "",
+            "patch_reasoning": {},
             "token_usage": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
             "start_time": start_time
         }
@@ -623,5 +875,8 @@ class BugLocalizationAgent:
         return (
             final_state.get('selected_functions', []),
             final_state.get('candidate_functions', []),
-            final_state.get('token_usage', {})
+            final_state.get('token_usage', {}),
+            final_state.get('patch', ''),
+            final_state.get('patch_reasoning', {})
         )
+

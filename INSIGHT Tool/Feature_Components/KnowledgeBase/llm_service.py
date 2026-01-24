@@ -130,104 +130,11 @@ class LLMService:
         
         return code
 
-
-
-
-
-    def generate_patch(self, issue_title: str, issue_body: str, 
-                      target_file: str, target_code: str, 
-                      analysis: str) -> str:
-        """
-        Generate a patch for the bug
-        
-        Args:
-            issue_title: Issue title
-            issue_body: Issue body
-            target_file: File to patch
-            target_code: Original code of the file
-            analysis: Previous analysis
-            
-        Returns:
-            Generated patch (diff or new code)
-        """
-        if not self.is_available():
-            return "LLM unavailable"
-            
-        try:
-            # Method inspired by "ChatRepair" (Xia et al., 2023) which emphasizes iterative reasoning and context,
-            # and "Impact of Chain-of-Thought Prompting on Automated Program Repair" (2024).
-            
-            prompt = ChatPromptTemplate.from_messages([
-                ("system", """You are an expert software engineer specializing in Automated Program Repair.
-Your task is to generate a patch using a structured Chain-of-Thought process.
-You must output ONLY a valid JSON object matching the schema below.
-
-Methodology:
-1.  **Strategy**: Select the best repair approach (e.g. Guard Clause).
-2.  **Rationale**: Explain why this fixes the root cause.
-3.  **Patch**: Provide the unified diff or code change.
-4.  **Verification**: mentally simulate cases.
-5.  **Quality**: Assess minimality/consistency.
-
-Schema:
-{{
-  "strategy": "Selected repair approach",
-  "rationale": "Why this fixes root cause",
-  "patch": {{
-    "file": "path/to/file",
-    "changes": "Unified diff or code modification",
-    "reasoning": "Why each change is necessary"
-  }},
-  "correctness": {{
-    "bug_case": "How it fixes the bug",
-    "normal_cases": "Preserves correct behavior",
-    "edge_cases": "Handles boundaries"
-  }},
-  "quality": {{
-    "minimality": "score/5",
-    "consistency": "score/5"
-  }},
-  "impact": {{
-    "breaking_changes": "none|description",
-    "affected_code": ["list of affected components"]
-  }},
-  "commit_message": "Concise description of fix"
-}}
-
-Do NOT provide any markdown formatting outside the JSON.
-"""),
-                ("human", """Issue: {title}
-Analysis: {analysis}
-
-Target File: {file}
-Original Code:
-```
-{code}
-```
-
-Generate the JSON patch.""")
-            ])
-            
-            chain = prompt | self.llm
-            response = chain.invoke({
-                "title": issue_title,
-                "analysis": analysis,
-                "file": target_file,
-                "code": target_code
-            })
-            
-            content = response.content.strip()
-            # Clean up potential markdown code blocks
-            if "```json" in content:
-                content = content.split("```json")[1].split("```")[0].strip()
-            elif "```" in content:
-                content = content.split("```")[1].split("```")[0].strip()
-                
-            return content
-            
-        except Exception as e:
-            logger.error(f"Error generating patch: {e}")
-            return f"{{\"error\": \"{str(e)}\"}}"
+    # NOTE: generate_patch() has been removed from LLMService.
+    # Patch generation is now handled by BugLocalizationAgent.patch_generator_node()
+    # which implements proper Chain-of-Thought reasoning based on:
+    # - ThinkRepair (Yin et al., ISSTA 2024)
+    # - SCoT (Li et al., TOSEM 2025)
 
     
     def retry_with_backoff(func):
