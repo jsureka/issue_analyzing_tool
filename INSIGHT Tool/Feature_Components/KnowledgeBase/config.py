@@ -6,13 +6,13 @@ import os
 from pathlib import Path
 
 # Model Configuration
-DEFAULT_MODEL_NAME = "microsoft/unixcoder-base"
+DEFAULT_MODEL_NAME = "jinaai/jina-embeddings-v2-base-code"
 EMBEDDING_DIMENSION = 768
-MAX_TOKEN_LENGTH = 512
-BATCH_SIZE = 32
+MAX_TOKEN_LENGTH = 1024
+BATCH_SIZE = 4
 
 # Storage Paths
-BASE_DIR = Path(__file__).parent.parent.parent
+BASE_DIR = Path(__file__).resolve().parent.parent.parent
 INDEX_STORAGE_DIR = BASE_DIR / "Data_Storage" / "KnowledgeBase"
 INDEX_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
 

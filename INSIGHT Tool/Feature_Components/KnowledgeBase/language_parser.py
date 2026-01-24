@@ -33,6 +33,33 @@ class ClassInfo:
     class_type: str = "class"  # "class", "interface", "enum"
 
 
+@dataclass
+class CallInfo:
+    """Information about a function/method call"""
+    name: str # The function/method name called
+    scope: Optional[str] = None # The object or module the function is called on (e.g. 'self', 'np', 'user')
+    args: List[str] = None
+    start_line: int = 0
+    end_line: int = 0
+
+@dataclass
+class ImportInfo:
+    """Information about an import"""
+    module_name: str # The actual module name (e.g. 'numpy', 'utils')
+    alias: Optional[str] = None # The alias used in code (e.g. 'np')
+    imported_elements: List[str] = None # Specific elements imported (e.g. ['func1', 'ClassA'])
+    
+    def to_string(self) -> str:
+        """Convert to string representation"""
+        if self.imported_elements:
+            base = f"from {self.module_name} import {', '.join(self.imported_elements)}"
+        else:
+            base = f"import {self.module_name}"
+        if self.alias:
+            base += f" as {self.alias}"
+        return base
+
+
 class LanguageParser(ABC):
     """Abstract base class for language-specific parsers"""
     
@@ -80,7 +107,7 @@ class LanguageParser(ABC):
         pass
     
     @abstractmethod
-    def extract_imports(self, tree, source_code: bytes) -> List[str]:
+    def extract_imports(self, tree, source_code: bytes) -> List[ImportInfo]:
         """
         Extract all import statements from the AST
         
@@ -89,12 +116,12 @@ class LanguageParser(ABC):
             source_code: Source code as bytes
             
         Returns:
-            List of import statements as strings
+            List of ImportInfo objects
         """
         pass
     
     @abstractmethod
-    def extract_calls(self, tree, source_code: bytes) -> Dict[str, List[str]]:
+    def extract_calls(self, tree, source_code: bytes) -> Dict[str, List[CallInfo]]:
         """
         Extract function call relationships
         
@@ -103,7 +130,7 @@ class LanguageParser(ABC):
             source_code: Source code as bytes
             
         Returns:
-            Dictionary mapping function names to lists of called function names
+            Dictionary mapping function names to lists of CallInfo objects
         """
         pass
     

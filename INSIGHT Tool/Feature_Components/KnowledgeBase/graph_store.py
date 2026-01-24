@@ -18,14 +18,7 @@ class GraphStore:
     
     def __init__(self, uri: str = None, 
                  user: str = None, password: str = None):
-        """
-        Initialize Neo4j connection
-        
-        Args:
-            uri: Neo4j connection URI (default: Config.NEO4J_URI)
-            user: Database username (default: Config.NEO4J_USER)
-            password: Database password (default: Config.NEO4J_PASSWORD)
-        """
+        """Initialize Neo4j connection."""
         self.uri = uri or Config.NEO4J_URI
         self.user = user or Config.NEO4J_USER
         self.password = password or Config.NEO4J_PASSWORD
@@ -89,53 +82,11 @@ class GraphStore:
             if not self.connect():
                 raise ConnectionError("Failed to connect to Neo4j database")
 
-    def create_directory_node(self, dir_id: str, repo: str, path: str, summary: str = "") -> bool:
-        """
-        Create a directory node in the graph (GraphRAG Community)
-        
-        Args:
-            dir_id: Unique directory identifier
-            repo: Repository name
-            path: Directory path relative to repo root
-            summary: LLM-generated summary of the directory
-            
-        Returns:
-            True if successful
-        """
-        self._ensure_connected()
-        
-        try:
-            with self.driver.session() as session:
-                query = """
-                CREATE (d:Directory {
-                    id: $dir_id,
-                    repo: $repo,
-                    path: $path,
-                    summary: $summary
-                })
-                """
-                session.run(query, dir_id=dir_id, repo=repo, path=path, summary=summary)
-                return True
-        except Exception as e:
-            logger.error(f"Failed to create directory node: {e}")
-            return False
+
 
     def create_file_node(self, file_id: str, repo: str, path: str, 
                         language: str, lines_of_code: int, commit_sha: str) -> bool:
-        """
-        Create a file node in the graph
-        
-        Args:
-            file_id: Unique file identifier
-            repo: Repository name
-            path: File path relative to repo root
-            language: Programming language
-            lines_of_code: Number of lines in file
-            commit_sha: Git commit SHA
-            
-        Returns:
-            True if successful
-        """
+        """Create a file node in the graph."""
         self._ensure_connected()
         
         try:
@@ -207,24 +158,7 @@ class GraphStore:
                            class_id: Optional[str], start_line: int, end_line: int,
                            signature: str, docstring: Optional[str], repo: str,
                            language: str = "python") -> bool:
-        """
-        Create a function node in the graph
-        
-        Args:
-            function_id: Unique function identifier
-            name: Function name
-            file_id: Parent file ID
-            class_id: Parent class ID (None if module-level)
-            start_line: Starting line number
-            end_line: Ending line number
-            signature: Function signature
-            docstring: Function docstring
-            repo: Repository name
-            language: Programming language (default: "python")
-            
-        Returns:
-            True if successful
-        """
+        """Create a function node in the graph."""
         self._ensure_connected()
         
         try:
@@ -279,13 +213,15 @@ class GraphStore:
             logger.error(f"Failed to create CONTAINS relationship: {e}")
             return False
     
-    def create_calls_relationship(self, caller_id: str, callee_name: str) -> bool:
+
+
+    def create_call_by_id(self, caller_id: str, callee_id: str) -> bool:
         """
-        Create a CALLS relationship between functions
+        Create a CALLS relationship between specific functions by ID
         
         Args:
             caller_id: Calling function ID
-            callee_name: Called function name (may not have full ID)
+            callee_id: Called function ID
             
         Returns:
             True if successful
@@ -294,17 +230,15 @@ class GraphStore:
         
         try:
             with self.driver.session() as session:
-                # Try to find callee by name
                 query = """
                 MATCH (caller:Function {id: $caller_id})
-                MATCH (callee:Function {name: $callee_name})
-                WHERE caller.repo = callee.repo
+                MATCH (callee:Function {id: $callee_id})
                 CREATE (caller)-[:CALLS]->(callee)
                 """
-                session.run(query, caller_id=caller_id, callee_name=callee_name)
+                session.run(query, caller_id=caller_id, callee_id=callee_id)
                 return True
         except Exception as e:
-            logger.debug(f"Could not create CALLS relationship: {e}")
+            logger.debug(f"Could not create CALLS relationship by ID: {e}")
             return False
     
     def create_imports_relationship(self, file_id: str, imported_path: str) -> bool:
@@ -364,42 +298,7 @@ class GraphStore:
         logger.info(f"Created {count} relationships in batch")
         return count
 
-    def get_function_neighbors(self, function_id: str, 
-                              relationship_type: str = "CALLS") -> List[Dict[str, Any]]:
-        """
-        Get neighboring functions connected by a specific relationship
-        
-        Args:
-            function_id: Function ID to query
-            relationship_type: Type of relationship (CALLS, etc.)
-            
-        Returns:
-            List of neighbor function information
-        """
-        self._ensure_connected()
-        
-        try:
-            with self.driver.session() as session:
-                query = f"""
-                MATCH (f:Function {{id: $function_id}})-[:{relationship_type}]->(neighbor:Function)
-                RETURN neighbor.id as id, neighbor.name as name, 
-                       neighbor.file_id as file_id, neighbor.signature as signature
-                """
-                result = session.run(query, function_id=function_id)
-                
-                neighbors = []
-                for record in result:
-                    neighbors.append({
-                        'id': record['id'],
-                        'name': record['name'],
-                        'file_id': record['file_id'],
-                        'signature': record['signature']
-                    })
-                
-                return neighbors
-        except Exception as e:
-            logger.error(f"Failed to query function neighbors: {e}")
-            return []
+
     
     def get_file_functions(self, file_id: str) -> List[Dict[str, Any]]:
         """
@@ -484,36 +383,7 @@ class GraphStore:
         except Exception as e:
             logger.error(f"Failed to get graph stats: {e}")
             return {'files': 0, 'classes': 0, 'functions': 0, 'relationships': 0}
-    def get_directory_summaries(self, repo_name: str) -> List[Dict[str, Any]]:
-        """
-        Get all directory summaries for a repository
-        
-        Args:
-            repo_name: Repository name
-            
-        Returns:
-            List of directory summaries
-        """
-        self._ensure_connected()
-        
-        try:
-            with self.driver.session() as session:
-                query = """
-                MATCH (d:Directory {repo: $repo_name})
-                RETURN d.path as path, d.summary as summary
-                """
-                result = session.run(query, repo_name=repo_name)
-                
-                summaries = []
-                for record in result:
-                    summaries.append({
-                        'path': record['path'],
-                        'summary': record['summary']
-                    })
-                return summaries
-        except Exception as e:
-            logger.error(f"Failed to get directory summaries: {e}")
-            return []
+
 
     def get_functions_in_file(self, file_path: str) -> List[Dict[str, Any]]:
         """
@@ -547,16 +417,28 @@ class GraphStore:
             logger.error(f"Failed to get functions in file {file_path}: {e}")
             return []
 
-    def get_function_neighbors(self, function_ids: List[str]) -> Dict[str, Dict[str, List[str]]]:
+    def get_function_neighbors(self, function_id: str, relationship_type: str = "CALLS") -> List[Dict[str, Any]]:
         """
-        Get immediate neighbors (callers and callees) for a list of functions.
+        Get immediate neighbors (callers and callees) for a single function.
         
         Args:
-            function_ids: List of function IDs
+            function_id: Function ID
+            relationship_type: Type of relationship (currently ignored, returns all CALLS)
             
         Returns:
-            Dict mapping function_id to {'callers': [], 'callees': []}
+            List of neighbor nodes (dicts)
         """
+        self._ensure_connected()
+        batch_result = self.get_function_neighbors_batch([function_id])
+        if function_id not in batch_result:
+            return []
+            
+        neighbors = batch_result[function_id]
+        # Combine callers and callees
+        return neighbors.get('callers', []) + neighbors.get('callees', [])
+
+    def get_function_neighbors_batch(self, function_ids: List[str]) -> Dict[str, Dict[str, List[str]]]:
+        """Get immediate neighbors (callers and callees) for a list of functions."""
         self._ensure_connected()
         query = """
         MATCH (f:Function)
@@ -564,21 +446,141 @@ class GraphStore:
         OPTIONAL MATCH (caller:Function)-[:CALLS]->(f)
         OPTIONAL MATCH (f)-[:CALLS]->(callee:Function)
         RETURN f.id as func_id, 
-               collect(DISTINCT caller.name) as callers,
-               collect(DISTINCT callee.name) as callees
+               collect(DISTINCT caller) as callers,
+               collect(DISTINCT callee) as callees
         """
         try:
             with self.driver.session() as session:
                 result = session.run(query, function_ids=function_ids)
                 neighbors = {}
                 for record in result:
+                    # Convert Neo4j nodes to dicts
+                    callers_data = []
+                    for node in record['callers']:
+                        if node:
+                            d = dict(node)
+                            if 'id' not in d: d['id'] = node.element_id
+                            callers_data.append(d)
+
+                    callees_data = []
+                    for node in record['callees']:
+                        if node:
+                            d = dict(node)
+                            if 'id' not in d: d['id'] = node.element_id
+                            callees_data.append(d)
+
                     neighbors[record['func_id']] = {
-                        'callers': [c for c in record['callers'] if c],
-                        'callees': [c for c in record['callees'] if c]
+                        'callers': callers_data,
+                        'callees': callees_data
                     }
                 return neighbors
         except Exception as e:
             logger.error(f"Failed to get function neighbors: {e}")
+            return {}
+
+    def get_siblings(self, function_id: str) -> List[Dict[str, Any]]:
+        """
+        Get sibling functions (functions in the same class, or same file if no class).
+        
+        Args:
+            function_id: ID of the function
+            
+        Returns:
+            List of sibling function nodes
+        """
+        self._ensure_connected()
+        
+        try:
+            with self.driver.session() as session:
+                # 1. Try Same Class
+                class_query = """
+                MATCH (f:Function {id: $fid})<-[:CONTAINS]-(c:Class)-[:CONTAINS]->(sibling:Function)
+                WHERE sibling.id <> $fid
+                RETURN sibling
+                """
+                result = session.run(class_query, fid=function_id)
+                siblings = []
+                for record in result:
+                    node = record['sibling']
+                    if node:
+                        siblings.append(dict(node))
+                
+                if siblings:
+                    return siblings
+                
+                # 2. If no class parent or no class siblings, try Same File (but top-level only? or all in file?)
+                # If function is top-level in file, we want other top-level functions.
+                # If function is in class, we prioritized class siblings above.
+                # Let's just get all functions in the same file as fallback or complementary?
+                # For safety, let's strictly restrict to "Same Parent" logic.
+                
+                file_query = """
+                MATCH (f:Function {id: $fid})
+                OPTIONAL MATCH (f)<-[:CONTAINS]-(parent)
+                WITH parent, f
+                WHERE parent IS NOT NULL
+                MATCH (parent)-[:CONTAINS]->(sibling:Function)
+                WHERE sibling.id <> $fid
+                RETURN sibling
+                """
+                result = session.run(file_query, fid=function_id)
+                for record in result:
+                    node = record['sibling']
+                    if node:
+                        # Avoid duplicates if we ran class query (but we returned early)
+                        d = dict(node)
+                        if 'id' not in d: d['id'] = node.element_id
+                        siblings.append(d)
+                        
+                return siblings
+        except Exception as e:
+            logger.error(f"Failed to get siblings: {e}")
+            return []
+
+    def get_function_neighbors_with_paths(self, function_ids: List[str]) -> Dict[str, Dict[str, List[Dict[str, Any]]]]:
+        """
+        Get immediate neighbors with file paths for hydration.
+        
+        Args:
+            function_ids: List of function IDs
+            
+        Returns:
+            Dict mapping function_id to {'callers': [{id, name, path, ...}], 'callees': []}
+        """
+        self._ensure_connected()
+        # Complex query to get path from File node
+        query = """
+        MATCH (f:Function)
+        WHERE f.id IN $function_ids
+        
+        // Callers
+        OPTIONAL MATCH (caller:Function)-[:CALLS]->(f)
+        OPTIONAL MATCH (caller)<-[:CONTAINS*1..2]-(c_file:File)
+        
+        // Callees
+        OPTIONAL MATCH (f)-[:CALLS]->(callee:Function)
+        OPTIONAL MATCH (callee)<-[:CONTAINS*1..2]-(ce_file:File)
+        
+        RETURN f.id as func_id, 
+               collect(DISTINCT {id: caller.id, name: caller.name, signature: caller.signature, path: c_file.path, start_line: caller.start_line, end_line: caller.end_line}) as callers,
+               collect(DISTINCT {id: callee.id, name: callee.name, signature: callee.signature, path: ce_file.path, start_line: callee.start_line, end_line: callee.end_line}) as callees
+        """
+        try:
+             with self.driver.session() as session:
+                result = session.run(query, function_ids=function_ids)
+                neighbors = {}
+                for record in result:
+                    # Filter out nulls (if no callers/callees)
+                    callers = [c for c in record['callers'] if c and c.get('id')]
+                    callees = [c for c in record['callees'] if c and c.get('id')]
+                    
+                    neighbors[record['func_id']] = {
+                        'callers': callers,
+                        'callees': callees
+                    }
+                return neighbors
+        except Exception as e:
+            logger.error(f"Failed to get neighbors with paths: {e}")
             return {}
 
     def get_context_subgraph(self, function_ids: List[str], depth: int = 1) -> str:

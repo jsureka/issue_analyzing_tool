@@ -9,6 +9,9 @@ from tqdm import tqdm
 import time
 import json
 
+# Fix for OpenMP runtime conflict (Error #15)
+os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
+
 # Setup paths
 script_path = os.path.abspath(__file__)
 script_dir = os.path.dirname(script_path)
@@ -34,7 +37,7 @@ from dotenv import load_dotenv
 load_dotenv(os.path.join(insight_tool_path, ".env"))
 
 try:
-    from Feature_Components.knowledgeBase import BugLocalization, IndexRepository, GetIndexStatus
+    from Feature_Components.Agent.agent import BugLocalizationAgent
     from Feature_Components.KnowledgeBase.indexer import RepositoryIndexer
     from config import Config
 except ImportError as e:
@@ -65,6 +68,40 @@ def clone_repo(repo_url, target_dir):
         return True
     except subprocess.CalledProcessError as e:
         logger.error(f"Failed to clone {repo_url}: {e}")
+        if e.stderr:
+            logger.error(f"Git Clone Stderr: {e.stderr.decode('utf-8', errors='replace') if isinstance(e.stderr, bytes) else e.stderr}")
+        return False
+
+def ensure_historical_state(repo_path, base_sha):
+    """
+    Ensures the repository is checked out to the specific base_sha.
+    Returns True if the state was changed (requiring re-indexing), False otherwise.
+    """
+    if not base_sha:
+        return False
+        
+    try:
+        # Get current HEAD
+        result = subprocess.run(['git', '-C', repo_path, 'rev-parse', 'HEAD'], capture_output=True, text=True, check=True)
+        current_sha = result.stdout.strip()
+        
+        if current_sha == base_sha:
+            return False # Already there
+            
+        logger.info(f"Switching {os.path.basename(repo_path)} from {current_sha[:7]} to {base_sha[:7]}...")
+        # Fetch if needed (shallow clones might miss it) - usually not needed if simple clone
+        subprocess.run(['git', '-C', repo_path, 'checkout', base_sha, '-f'], check=True, capture_output=True)
+        return True # Changed state
+        
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Failed to checkout {base_sha}: {e}")
+        # Try fetch and retry
+        try:
+             subprocess.run(['git', '-C', repo_path, 'fetch', 'origin', base_sha], check=True, capture_output=True)
+             subprocess.run(['git', '-C', repo_path, 'checkout', base_sha, '-f'], check=True, capture_output=True)
+             return True
+        except Exception as e2:
+             logger.error(f"Retry checkout failed: {e2}")
         return False
 
         return False
@@ -171,62 +208,83 @@ def evaluate():
         
         # Prepare local path
         repo_dir_name = repo_name.replace('/', '_')
-        repo_path = os.path.join(TEMP_REPO_DIR, repo_dir_name)
+        repo_dir = os.path.join(TEMP_REPO_DIR, repo_dir_name)
         
-        # 1. Clone
-        if not clone_repo(repo_url, repo_path):
+        # 1. Clone (Ensure repo exists)
+        if not clone_repo(repo_url, repo_dir):
             continue
             
-        # 2. Index (Check if already indexed)
-        status = GetIndexStatus(repo_name)
-        
-        if status.get('indexed'):
-            logger.info(f"Repository {repo_name} is already indexed. Skipping indexing.")
-        else:
-            logger.info(f"Indexing {repo_name}...")
-            try:
-                index_result = IndexRepository(repo_path, repo_name)
-            finally:
-                if not index_result.get('success'):
-                    logger.error(f"Indexing failed for {repo_name}: {index_result.get('error')}")
-                    continue
-            
-        # Initialize BugLocalization
-        from Feature_Components.KnowledgeBase.bug_localization import BugLocalization
-        bug_localization = BugLocalization(repo_name, repo_path)
+        # Create Indexer wrapper
+        indexer = RepositoryIndexer(
+            neo4j_uri=Config.NEO4J_URI,
+            neo4j_user=Config.NEO4J_USER,
+            neo4j_password=Config.NEO4J_PASSWORD,
+            index_dir=Config.KNOWLEDGE_BASE_DIR
+        )
 
-        # 3. Evaluate Issues
-        for idx, row in tqdm(repo_issues.iterrows(), total=len(repo_issues), desc=f"Evaluating {repo_name}"):
+        # Process each issue
+        repo_metrics = []
+        
+        for issue_data in repo_issues.to_dict('records'): # Testing: Limit to 1 issue for Agent verification
+            issue_title = issue_data['Issue Title']
+            issue_body = issue_data.get('Issue Description', '')
+            ground_truth_files = ast.literal_eval(issue_data['Changed Files'])
+            # Normalized GT
+            ground_truth_files = [os.path.normpath(f) for f in ground_truth_files]
             
-            issue_title = row['Issue Title']
-            issue_body = row['Issue Description']
+            ground_truth_classes = ast.literal_eval(issue_data.get('Changed Classes', '[]'))
+            ground_truth_funcs = ast.literal_eval(issue_data.get('Changed Functions', '[]'))
             
-            # Ground Truth
-            try:
-                gt_files = ast.literal_eval(row['Changed Files'])
-            except:
-                gt_files = []
+            base_sha = issue_data.get('Base SHA')
+            if pd.isna(base_sha):
+                base_sha = None
+            else:
+                base_sha = str(base_sha).strip()
             
-            try:
-                gt_classes = ast.literal_eval(row['Changed Classes']) if 'Changed Classes' in row else []
-            except:
-                gt_classes = []
+            # --- INDEX CHECK ---
+            # Check if index exists for this version before doing anything expensive
+            # safe_repo_name = repo_name.replace('/', '_')
+            # target_index_dir = os.path.join(Config.KNOWLEDGE_BASE_DIR, safe_repo_name, base_sha)
+            # index_file = os.path.join(target_index_dir, "index.faiss")
+            
+            # if not os.path.exists(index_file):
+            #     logger.info(f"Skipping {repo_name} at {base_sha}: Not found in index at {index_file}")
+            #     continue
                 
-            try:
-                gt_funcs = ast.literal_eval(row['Changed Functions'])
-            except:
-                gt_funcs = []
-                
-            # Run Localization
-            start_time = time.time()
+            # --- HISTORICAL CONSISTENCY CHECK ---
+            state_changed = ensure_historical_state(repo_dir, base_sha)
             
+            # Ensure index is up to date (Indexer handles versioning internally now)
             try:
-                selected_funcs, all_candidates, token_usage = bug_localization.localize(issue_title, issue_body)
+                # Indexer will skip if valid index exists for this SHA
+                indexer.index_repository(repo_dir, repo_name) 
             except Exception as e:
-                logger.error(f"Error localizing issue {row['Issue URL']}: {e}")
+                logger.error(f"Indexing/Verification failed for {repo_name} at {base_sha}: {e}")
+                continue
+            
+            # double check we are good to go
+            # --- END HISTORICAL CHECK ---
+
+            # Now Localize
+            start_time = time.time()
+            bug_localizer = None
+            try:
+                logger.info(f"Initializing BugLocalizationAgent for {repo_name}")
+                bug_localizer = BugLocalizationAgent(repo_name, repo_dir)
+                
+                # Run localization
+                selected_funcs, all_candidates, token_usage = bug_localizer.localize(issue_title, issue_body)
+                
+                # --- PATCH GENERATION (Verification of CoT) ---
+                generated_patch = ""
+                # Patch generation disabled by user request
+
+            except Exception as e:
+                logger.error(f"Error localizing issue {issue_data['Issue URL']}: {e}")
                 selected_funcs = []
                 all_candidates = []
                 token_usage = {}
+                generated_patch = ""
             
             duration = time.time() - start_time
             
@@ -242,7 +300,11 @@ def evaluate():
             if selected_funcs:
                 for res in selected_funcs[:Config.LLM_SELECTION_COUNT]:  
                     # Files
-                    fpath = res['file_path']
+                    fpath = res.get('file_path') or res.get('path')
+                    if not fpath:
+                        logger.warning(f"Skipping result with no file path: {res.get('name', 'UNKNOWN')}")
+                        continue
+                    
                     if fpath not in seen_files:
                         pred_files.append(fpath)
                         seen_files.add(fpath)
@@ -266,11 +328,11 @@ def evaluate():
             
             # DEBUG: Print comparison
             logger.info(f"\n--- Issue: {issue_title} ---")
-            logger.info(f"GT Files: {gt_files}")
+            logger.info(f"GT Files: {ground_truth_files}")
             logger.info(f"Pred Files: {pred_files}")
-            logger.info(f"GT Classes: {gt_classes}")
+            logger.info(f"GT Classes: {ground_truth_classes}")
             logger.info(f"Pred Classes: {pred_classes}")
-            logger.info(f"GT Funcs: {gt_funcs}")
+            logger.info(f"GT Funcs: {ground_truth_funcs}")
             logger.info(f"Pred Funcs: {pred_funcs}")
 
             # 1. Retrieval Stage (Candidates)
@@ -297,20 +359,23 @@ def evaluate():
             # Debug: Check if GT is in Retrieved Candidates
             logger.info(f"--- Retrieval Debug (Top-{Config.RETRIEVER_TOP_K}) ---")
             
+            # Normalize retrieved paths for comparison
+            norm_retrieved = [os.path.normpath(r) for r in retrieved_files]
+            
             # Files
-            found_files = [f for f in gt_files if any(r.endswith(f) or f.endswith(r) for r in retrieved_files)]
-            missing_files = set(gt_files) - set(found_files) 
-            logger.info(f"GT Files Found in Retrieval: {len(found_files)}/{len(gt_files)} -> {found_files}")
+            found_files = [f for f in ground_truth_files if any(r.endswith(f) or f.endswith(r) for r in norm_retrieved)]
+            missing_files = set(ground_truth_files) - set(found_files) 
+            logger.info(f"GT Files Found in Retrieval: {len(found_files)}/{len(ground_truth_files)} -> {found_files}")
             if missing_files:
                  logger.info(f"GT Files MISSING in Retrieval: {missing_files}")
 
             # Classes
-            found_classes = [c for c in gt_classes if c in retrieved_classes]
-            logger.info(f"GT Classes Found in Retrieval: {len(found_classes)}/{len(gt_classes)} -> {found_classes}")
+            found_classes = [c for c in ground_truth_classes if c in retrieved_classes]
+            logger.info(f"GT Classes Found in Retrieval: {len(found_classes)}/{len(ground_truth_classes)} -> {found_classes}")
 
             # Funcs
-            found_funcs = [f for f in gt_funcs if f in retrieved_funcs]
-            logger.info(f"GT Functions Found in Retrieval: {len(found_funcs)}/{len(gt_funcs)} -> {found_funcs}")
+            found_funcs = [f for f in ground_truth_funcs if f in retrieved_funcs]
+            logger.info(f"GT Functions Found in Retrieval: {len(found_funcs)}/{len(ground_truth_funcs)} -> {found_funcs}")
 
             llm_input_files = set()
             llm_input_classes = set()
@@ -324,8 +389,8 @@ def evaluate():
 
             logger.info(f"--- LLM Input Debug ---")
             # Classes in LLM Input
-            input_classes = [c for c in gt_classes if c in llm_input_classes]
-            logger.info(f"GT Classes in LLM Input: {len(input_classes)}/{len(gt_classes)} -> {input_classes}")
+            input_classes = [c for c in ground_truth_classes if c in llm_input_classes]
+            logger.info(f"GT Classes in LLM Input: {len(input_classes)}/{len(ground_truth_classes)} -> {input_classes}")
 
             # Assign to variables expected by metric calc
             # but original code used selected_files, selected_funcs_names, selected_class_names)
@@ -337,23 +402,23 @@ def evaluate():
             k_values = [1, 5, 10, 20, 30]
             
             # Retriever Metrics (Files)
-            retriever_metrics = calculate_metrics_at_k(retrieved_files, gt_files, k_values)
-            retriever_map = calculate_ap(retrieved_files, gt_files)
+            retriever_metrics = calculate_metrics_at_k(retrieved_files, ground_truth_files, k_values)
+            retriever_map = calculate_ap(retrieved_files, ground_truth_files)
             
             # LLM Metrics (Files) - k=[1, 3, 5, 10]
-            llm_metrics = calculate_metrics_at_k(selected_files, gt_files, [1, 3, 5, 10])
-            llm_map = calculate_ap(selected_files, gt_files)
+            llm_metrics = calculate_metrics_at_k(selected_files, ground_truth_files, [1, 3, 5, 10])
+            llm_map = calculate_ap(selected_files, ground_truth_files)
 
             # LLM Metrics (Classes) - k=[1, 3, 5, 10]
-            llm_class_metrics = calculate_metrics_at_k(selected_class_names, gt_classes, [1, 3, 5, 10])
-            llm_class_map = calculate_ap(selected_class_names, gt_classes)
+            llm_class_metrics = calculate_metrics_at_k(selected_class_names, ground_truth_classes, [1, 3, 5, 10])
+            llm_class_map = calculate_ap(selected_class_names, ground_truth_classes)
 
             # LLM Metrics (Functions) - k=[1, 3, 5, 10]
-            llm_func_metrics = calculate_metrics_at_k(selected_funcs_names, gt_funcs, [1, 3, 5, 10])
-            llm_func_map = calculate_ap(selected_funcs_names, gt_funcs)
+            llm_func_metrics = calculate_metrics_at_k(selected_funcs_names, ground_truth_funcs, [1, 3, 5, 10])
+            llm_func_map = calculate_ap(selected_funcs_names, ground_truth_funcs)
             
             # LLM Metrics (Function/Class Combined) - k=[1, 3, 5, 10]
-            gt_func_class = list(set(gt_classes + gt_funcs))
+            gt_func_class = list(set(ground_truth_classes + ground_truth_funcs))
             pred_func_class = []
             pred_func_class = selected_funcs_names + selected_class_names
             
@@ -361,10 +426,18 @@ def evaluate():
             llm_func_class_map = calculate_ap(pred_func_class, gt_func_class)
 
             # Combine Results
+            model_name = "Unknown"
+            if bug_localizer:
+                 model_name = bug_localizer.llm_service.model_name
+
+            input_tokens = token_usage.get('input_tokens', token_usage.get('prompt_tokens', 0)) if token_usage else 0
+            output_tokens = token_usage.get('output_tokens', token_usage.get('completion_tokens', 0)) if token_usage else 0
+            total_tokens = token_usage.get('total_tokens', 0) if token_usage else 0
+
             result_row = {
                 'Repository': repo_name,
-                'Issue URL': row['Issue URL'],
-                'Model': bug_localization.llm_service.model_name,
+                'Issue URL': issue_data['Issue URL'],
+                'Model': model_name,
                 
                 # Retriever Metrics
                 'Retriever MAP': retriever_map,
@@ -386,10 +459,12 @@ def evaluate():
                 'LLM FuncClass MAP': llm_func_class_map,
                 **{f'LLM FuncClass {k}': v for k, v in llm_func_class_metrics.items()},
                 
-                'Input Tokens': token_usage.get('input_tokens', token_usage.get('prompt_tokens', 0)) if token_usage else 0,
-                'Output Tokens': token_usage.get('output_tokens', token_usage.get('completion_tokens', 0)) if token_usage else 0,
-                'Total Tokens': token_usage.get('total_tokens', 0) if token_usage else 0,
-                'Duration': duration
+                'Input Tokens': input_tokens,
+                'Output Tokens': output_tokens,
+                'Total Tokens': total_tokens,
+                'Duration': duration,
+                'Analysis': selected_funcs[0].get('analysis', '') if selected_funcs else '',
+                'Generated Patch': generated_patch
             }
             results.append(result_row)
             

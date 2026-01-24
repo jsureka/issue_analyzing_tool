@@ -54,23 +54,37 @@ class DenseRetriever:
         Returns:
             True if successful
         """
-        # Try new format first (subdirectory)
+        # Index files are stored in versioned subdirectories: repo_name/commit_sha/index.faiss
         repo_dir = self.index_dir / repo_name.replace('/', '_')
-        index_path = repo_dir / "index.faiss"
-        metadata_path = repo_dir / "metadata.json"
         
-        # Fallback to old format
-        if not index_path.exists():
-            index_path = self.index_dir / f"{repo_name.replace('/', '_')}.index"
-            metadata_path = self.index_dir / f"{repo_name.replace('/', '_')}_metadata.json"
-        
-        if not index_path.exists():
-            logger.error(f"Index not found for repository: {repo_name}")
+        if not repo_dir.exists():
+            logger.error(f"Repository directory not found: {repo_name}")
             return False
         
-        if not metadata_path.exists():
-            logger.error(f"Metadata not found for repository: {repo_name}")
+        # Find the latest indexed version (most recently modified commit SHA directory)
+        index_versions = []
+        for subdir in repo_dir.iterdir():
+            if subdir.is_dir():
+                index_path = subdir / "index.faiss"
+                metadata_path = subdir / "metadata.json"
+                if index_path.exists() and metadata_path.exists():
+                    index_versions.append({
+                        'commit_sha': subdir.name,
+                        'index_path': index_path,
+                        'metadata_path': metadata_path,
+                        'last_modified': index_path.stat().st_mtime
+                    })
+        
+        if not index_versions:
+            logger.error(f"No valid index found for repository: {repo_name}")
             return False
+        
+        # Get the most recent version
+        latest = max(index_versions, key=lambda x: x['last_modified'])
+        index_path = latest['index_path']
+        metadata_path = latest['metadata_path']
+        
+        logger.info(f"Loading index from commit: {latest['commit_sha']}")
         
         # Load function index and metadata
         if not self.vector_store.load_index(str(index_path)):
