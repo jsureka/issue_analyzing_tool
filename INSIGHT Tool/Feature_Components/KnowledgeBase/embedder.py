@@ -184,26 +184,19 @@ class CodeEmbedder:
                 
                 # Generate embeddings
                 with torch.no_grad():
-                    # SANITY CHECK: Ensure input dimensions match before passing to model
+                    # Fix Tensor Shape Mismatch (if any)
                     if 'input_ids' in inputs and 'attention_mask' in inputs:
-                        ids_shape = inputs['input_ids'].shape
-                        mask_shape = inputs['attention_mask'].shape
-                        
-                        if ids_shape[0] != mask_shape[0] or ids_shape[1] != mask_shape[1]:
-                            logger.warning(f"Tensor mismatch detected! IDs: {ids_shape}, Mask: {mask_shape}. Fixing...")
-                            
-                            # Fix Batch Dimension
-                            if mask_shape[0] == 1 and ids_shape[0] > 1:
-                                inputs['attention_mask'] = inputs['attention_mask'].expand(ids_shape[0], -1)
-                            
-                            # Fix Sequence Dimension
-                            current_mask = inputs['attention_mask']
-                            if current_mask.size(1) > ids_shape[1]:
-                                inputs['attention_mask'] = current_mask[:, :ids_shape[1]]
-                            elif current_mask.size(1) < ids_shape[1]:
-                                padding = torch.zeros((current_mask.size(0), ids_shape[1] - current_mask.size(1)), 
-                                                      device=current_mask.device, dtype=current_mask.dtype)
-                                inputs['attention_mask'] = torch.cat([current_mask, padding], dim=1)
+                        if inputs['input_ids'].shape != inputs['attention_mask'].shape:
+                             # Expand mask if batch dim mismatch
+                            if inputs['attention_mask'].size(0) == 1:
+                                inputs['attention_mask'] = inputs['attention_mask'].expand(inputs['input_ids'].size(0), -1)
+                            # Truncate/Pad mask if seq dim mismatch
+                            target_len = inputs['input_ids'].size(1)
+                            if inputs['attention_mask'].size(1) > target_len:
+                                inputs['attention_mask'] = inputs['attention_mask'][:, :target_len]
+                            elif inputs['attention_mask'].size(1) < target_len:
+                                padding = torch.zeros((inputs['attention_mask'].size(0), target_len - inputs['attention_mask'].size(1)), device=self.device)
+                                inputs['attention_mask'] = torch.cat([inputs['attention_mask'], padding], dim=1)
 
                     outputs = self.model(**inputs)
                     # Use mean pooling

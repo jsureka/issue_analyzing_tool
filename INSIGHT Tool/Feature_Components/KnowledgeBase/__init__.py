@@ -5,7 +5,7 @@ Phase 1: Single-channel dense retrieval for bug localization
 
 __version__ = "1.0.0"
 
-from .bug_localization import BugLocalization
+# from .bug_localization import BugLocalization
 from .indexer import RepositoryIndexer
 from .index_registry import IndexRegistry
 import os

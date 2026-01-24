@@ -59,10 +59,7 @@ class DenseRetriever:
         index_path = repo_dir / "index.faiss"
         metadata_path = repo_dir / "metadata.json"
         
-        # Fallback to old format
-        if not index_path.exists():
-            index_path = self.index_dir / f"{repo_name.replace('/', '_')}.index"
-            metadata_path = self.index_dir / f"{repo_name.replace('/', '_')}_metadata.json"
+
         
         if not index_path.exists():
             logger.error(f"Index not found for repository: {repo_name}")

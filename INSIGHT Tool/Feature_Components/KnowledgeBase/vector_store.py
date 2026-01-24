@@ -208,10 +208,7 @@ class VectorStore:
             if scores:
                 min_score = min(scores)
                 max_score = max(scores)
-                # if max_score > min_score:
-                #     scores = [(s - min_score) / (max_score - min_score) for s in scores]
-                # else:
-                #     scores = [1.0] * len(scores)
+
                 pass
             
             # Get corresponding metadata

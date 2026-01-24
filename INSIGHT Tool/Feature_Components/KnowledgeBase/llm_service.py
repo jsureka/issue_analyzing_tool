@@ -5,6 +5,9 @@ Uses Google's Gemini models for code analysis and patch generation
 
 import logging
 import os
+import time
+import functools
+import re
 from typing import Dict, Any, Optional, List
 import google.generativeai as genai
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -151,8 +154,48 @@ class LLMService:
             return "LLM unavailable"
             
         try:
+            # Method inspired by "ChatRepair" (Xia et al., 2023) which emphasizes iterative reasoning and context,
+            # and "Impact of Chain-of-Thought Prompting on Automated Program Repair" (2024).
+            
             prompt = ChatPromptTemplate.from_messages([
-                ("system", "You are an expert developer. Provide a concise step-by-step plan to fix the identified bug. You may include pseudocode if it helps clarify the logic. Do NOT provide full code patches, verbose explanations, or 'important considerations' sections. Keep it strictly to the plan."),
+                ("system", """You are an expert software engineer specializing in Automated Program Repair.
+Your task is to generate a patch using a structured Chain-of-Thought process.
+You must output ONLY a valid JSON object matching the schema below.
+
+Methodology:
+1.  **Strategy**: Select the best repair approach (e.g. Guard Clause).
+2.  **Rationale**: Explain why this fixes the root cause.
+3.  **Patch**: Provide the unified diff or code change.
+4.  **Verification**: mentally simulate cases.
+5.  **Quality**: Assess minimality/consistency.
+
+Schema:
+{{
+  "strategy": "Selected repair approach",
+  "rationale": "Why this fixes root cause",
+  "patch": {{
+    "file": "path/to/file",
+    "changes": "Unified diff or code modification",
+    "reasoning": "Why each change is necessary"
+  }},
+  "correctness": {{
+    "bug_case": "How it fixes the bug",
+    "normal_cases": "Preserves correct behavior",
+    "edge_cases": "Handles boundaries"
+  }},
+  "quality": {{
+    "minimality": "score/5",
+    "consistency": "score/5"
+  }},
+  "impact": {{
+    "breaking_changes": "none|description",
+    "affected_code": ["list of affected components"]
+  }},
+  "commit_message": "Concise description of fix"
+}}
+
+Do NOT provide any markdown formatting outside the JSON.
+"""),
                 ("human", """Issue: {title}
 Analysis: {analysis}
 
@@ -162,10 +205,7 @@ Original Code:
 {code}
 ```
 
-Generate a concise solution plan.
-1. Provide high-level pseudocode or step-by-step directions.
-2. DO NOT generate actual code blocks.
-3. Keep it short and actionable.""")
+Generate the JSON patch.""")
             ])
             
             chain = prompt | self.llm
@@ -176,39 +216,41 @@ Generate a concise solution plan.
                 "code": target_code
             })
             
-            return response.content
+            content = response.content.strip()
+            # Clean up potential markdown code blocks
+            if "```json" in content:
+                content = content.split("```json")[1].split("```")[0].strip()
+            elif "```" in content:
+                content = content.split("```")[1].split("```")[0].strip()
+                
+            return content
+            
         except Exception as e:
             logger.error(f"Error generating patch: {e}")
-            return f"Error generating patch: {e}"
-            return f"Error generating patch: {e}"
+            return f"{{\"error\": \"{str(e)}\"}}"
 
-
+    
     def retry_with_backoff(func):
         """Decorator for retrying with exponential backoff"""
-        import time
-        import functools
-        import re
         
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
-            max_retries = 8 # Increased to allow for longer waits (up to ~17 mins total)
-            base_delay = 4  # Increased base delay
+            max_retries = 8 
+            base_delay = 4
             
             for attempt in range(max_retries):
                 try:
                     return func(*args, **kwargs)
                 except Exception as e:
                     error_msg = str(e).lower()
-                    is_rate_limit = "429" in error_msg or "quota" in error_msg or "rate limit" in error_msg or "ratelimit" in error_msg
+                    is_rate_limit = "429" in error_msg or "quota" in error_msg or "rate limit" in error_msg
                     
                     if is_rate_limit:
                         if attempt == max_retries - 1:
                             logger.error(f"Max retries ({max_retries}) exceeded for rate limit.")
                             raise
                         
-                        # Try to parse wait time from error message
                         wait_time = 0
-                        # Pattern for "Please retry in Xs" or "retry_delay { seconds: X }"
                         match = re.search(r"retry in (\d+(\.\d+)?)s", error_msg)
                         if match:
                             wait_time = float(match.group(1))
@@ -217,9 +259,8 @@ Generate a concise solution plan.
                             if match:
                                 wait_time = float(match.group(1))
                         
-                        # Use parsed time + buffer, or exponential backoff
                         if wait_time > 0:
-                            delay = wait_time + 2 # Add buffer
+                            delay = wait_time + 2
                         else:
                             delay = base_delay * (2 ** attempt)
                             
@@ -229,6 +270,8 @@ Generate a concise solution plan.
                         raise
             return None
         return wrapper
+
+
 
     @retry_with_backoff
     def get_response(self, prompt: str, system_message: str = None, json_mode: bool = False) -> str:
@@ -247,32 +290,9 @@ Generate a concise solution plan.
             return "LLM unavailable"
             
         try:
-            messages = []
-            if system_message:
-                messages.append(("system", system_message))
-            messages.append(("human", prompt))
+            # Use ("human", "{user_input}") and pass input in invoke to avoid template issues
             
-            prompt_template = ChatPromptTemplate.from_messages(messages)
-            chain = prompt_template | self.llm
-            
-            # If json_mode is requested, we might want to pass bind(response_format={"type": "json_object"}) 
-            # for OpenAI context, but for now we'll rely on the prompt being explicit.
-            # We can expand this later to use native JSON mode if available.
-            
-            # Escape curly braces in prompt inputs to avoid LangChain variable injection errors
-            sanitized_prompt = prompt.replace('{', '{{').replace('}', '}}') if prompt else ""
-            
-            # Re-create prompt template with sanitized input
-            # Actually, passing it as a variable is safer than f-string into template definition if using from_template
-            # But from_messages takes a list of (role, content). 
-            # If content contains brackets, it treats them as vars.
-            # We should construct the message objects directly to bypass templating if we can, 
-            # but ChatPromptTemplate is designed for templates.
-            # Easiest fix: use .from_messages with actual Message objects (not tuples) or ensure escaping.
-            # Let's try escaping.
-            
-            # Wait, if we use ("human", sanitized_prompt), it treats it as a template string.
-            # Better approach: Use ("human", "{input}") and pass input in invoke.
+            # Use ("human", "{user_input}") and pass input in invoke to avoid template issues
             
             safe_messages = []
             if system_message:
@@ -428,16 +448,8 @@ Select the buggy entities.""")
                     if orig_cand:
                         new_cand = orig_cand.copy()
                         new_cand['llm_reasoning'] = item.get('reasoning')
-                        # Ensure entity type is correct based on category bucket? 
-                        # Or trust original. Trust original.
                         selected_candidates.append(new_cand)
 
-            # Limit total selection count? Or just return all relevant.
-            # config.LLM_SELECTION_COUNT applies to total items usually.
-            
-            # Sort by priority? The prompt asked for granular. 
-            # We just return the list; the caller sorts/ranks.
-            
             # Extract token usage
             token_usage = {}
             if hasattr(response, 'response_metadata'):

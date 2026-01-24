@@ -7,22 +7,33 @@ INSIGHT is a GitHub application that automatically localizes bugs in software re
 
 ## Features
 
-✨ **RAG-Based Localization**: Combines dense vector retrieval with LLM-powered analysis  
-🎯 **Smart Query Generation**: LLM generates optimized search queries from issue descriptions  
-📊 **Knowledge Graph**: Enriches candidates with caller/callee relationships  
+✨ **Agentic RAG**: LangGraph-based agent that plans, retrieves, expands, and selects candidates  
+🎯 **Smart Query Generation**: Planner node looks at the issue and generates precise search queries  
+📊 **Graph-Augmented**: Expander node enriches candidates with 1-hop caller/callee neighbors (Neo4j)  
+🧠 **Chain-of-Thought Patching**: Generates fixes using a rigorous 5-step reasoning process (Strategy -> Rationale -> Patch -> Verification -> Quality)  
 🌍 **Multi-Language**: Supports Python, Java, and Kotlin  
 ⚡ **Auto-Updates**: Automatically updates knowledge base when code changes  
-📈 **High Accuracy**: 76.67% Hit@3 on LCA benchmark
+📈 **High Accuracy**: 59.52% Hit@3 on LCA benchmark
 
 ## How It Works
 
-1. **Issue Received**: GitHub webhook triggers when an issue is opened
-2. **Query Generation**: LLM creates an optimized search query
-3. **Dense Retrieval**: Retrieves top-20 candidate entities (Files, Classes, Functions) using semantic search
-4. **Graph Enrichment**: Adds caller/callee context from code knowledge graph
-5. **LLM Selection**: Selects top-5 most likely buggy entities
-6. **Analysis & Patch**: LLM explains the bug and suggests a fix
-7. **Comment Posted**: Analysis posted as a GitHub comment
+**1. Agentic Localization (Graph-Based RAG)**
+The core localization is handled by a `BugLocalizationAgent` built with **LangGraph**:
+1.  **Planner Node**: Analyzes the issue to generate targeted search queries.
+2.  **Retriever Node**: Fetches top candidates using **Deep Semantics** (`jina-embeddings-v2-base-code`).
+3.  **Expander Node**: Crawls the **Code Knowledge Graph** (Neo4j) to find relevant neighbors (callers/callees) missed by vector search.
+4.  **Selector Node**: Uses LLM to rank and select the root cause candidates.
+
+**2. Patch Generation (Chain-of-Thought)**
+Once localized, the system generates a fix using a 5-step Chain-of-Thought protocol:
+1.  **Define Objective**: Analyze constraints.
+2.  **Strategies**: Compare repair approaches (e.g., Guard Clause).
+3.  **Design**: Draft the minimal patch.
+4.  **Verification**: Simulate bug/normal/edge cases.
+5.  **Assessment**: Rate quality and side effects.
+
+**3. Delivery**
+- The analysis and JSON-structured patch are posted back to GitHub.
 
 ## Quick Start
 
@@ -108,28 +119,27 @@ This will:
 
 Performance on the [LCA Bug Localization benchmark](https://huggingface.co/datasets/JetBrains-Research/lca-bug-localization) (30 issues, Python/Java/Kotlin):
 
-**File-Level (k=3)**:
-- **Hit@3**: 76.67% (found buggy file in top 3 in 76.67% of cases)
-- **Precision@3**: 35.56%
-- **Recall@3**: 50.06%
-- **F1@3**: 38.47%
-- **MAP**: 0.4377
+**File-Level**:
+- **Hit@3**: 59.52%
+- **Precision@5**: 56.75%
+- **Recall@5**: 43.00%
+- **F1@5**: 48.93%
 
-**Function-Level (k=3)**:
-- **Hit@3**: 13.33%
-- **F1@3**: 5.24%
+**Function-Level**:
+- **Hit@3**: 54.76%
+- **F1@5**: 42.79%
 
 ## Architecture
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for detailed system architecture.
 
 **Key Components**:
-- `bug_localization.py`: Main RAG pipeline
-- `llm_service.py`: LLM interface (GPT-4o/Gemini)
-- `retriever.py`: Dense retrieval (FAISS + UnixCoder)
+- `agent.py`: LangGraph-based Agentic RAG pipeline (Planner -> Retriever -> Expander -> Selector)
+- `workflow_manager.py`: Orchestrates Agent + Patch Generation
+- `llm_service.py`: LLM interface (GPT-4o/Gemini) with CoT Patching
+- `embedder.py`: Jina Embeddings v2
 - `graph_store.py`: Knowledge graph (Neo4j)
-- `indexer.py`: Repository indexing
-- `workflow_manager.py`: LangGraph orchestration (optional)
+- `indexer.py`: Repository indexing (AST + Vectors + Relations)
 
 ## License
 

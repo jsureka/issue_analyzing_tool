@@ -12,117 +12,88 @@ INSIGHT (Issue Analyzing Tool) is a GitHub application that provides automated b
 - **GitHub Integration**: Automated knowledge base updates on code changes
 
 ## Architecture
+```mermaid
+graph TD
+    Event["GitHub Issue Event"] --> WM[WorkflowManager]
+    
+    subgraph Agent ["BugLocalizationAgent (LangGraph)"]
+        Planner["Planner Node"] -->|Queries| Retriever["Retriever Node"]
+        Retriever -->|Candidates| Expander["Expander Node"]
+        Expander -->|"Candidates + Neighbors"| Selector["Selector Node"]
+    end
+    
+    WM --> Planner
+    Selector -->|"Selected Functions"| PatchGen["Patch Generation (CoT)"]
+    PatchGen -->|"JSON Patch"| WM
+    WM --> Comment["GitHub Comment"]
 
-```
-┌──────────────────────────────────────────────────────────┐
-│                    GitHub Webhooks                        │
-│         ┌──────────────┬──────────────┐                   │
-│         │Issue Events  │Push Events   │                   │
-│         └──────┬───────┴───────┬──────┘                   │
-│                │               │                          │
-│                ▼               ▼                          │
-│       ┌────────────┐  ┌────────────────┐                 │
-│       │Issue       │  │Repository      │                 │
-│       │Handler     │  │Indexer         │                 │
-│       └──────┬─────┘  └────────┬───────┘                 │
-│              │                 │                          │
-│              │                 ▼                          │
-│              │        ┌────────────────┐                  │
-│              │        │Knowledge Base  │                  │
-│              │        │• FAISS (Vectors)│                  │
-│              │        │• Neo4j (Graph)  │                  │
-│              │        └────────┬───────┘                  │
-│              │                 │                          │
-│              ▼                 │                          │
-│       ┌───────────────────────▼──────┐                   │
-│       │    Bug Localization Pipeline  │                  │
-│       │    (BugLocalization class)    │                  │
-│       │                               │                  │
-│       │  1. Generate Search Query     │                  │
-│       │     (LLM)                     │                  │
-│       │  2. Dense Retrieval           │                  │
-│       │     (FAISS, k=20)             │                  │
-│       │  3. Graph Enrichment          │                  │
-│       │     (Neo4j: callers/callees)  │                  │
-│       │  4. LLM Selection             │                  │
-│       │     (Top 5 entities)          │                  │
-│       │  5. Generate Analysis &Patch  │                  │
-│       │     (LLM)                     │                  │
-│       └───────────────────────────────┘                  │
-│                       │                                   │
-│                       ▼                                   │
-│              GitHub Comment Posted                        │
-└──────────────────────────────────────────────────────────┘
+    subgraph KB ["Knowledge Base"]
+        FAISS[("FAISS Vector Store")]
+        Neo4j[("Neo4j Graph Store")]
+    end
+
+    Retriever <--> FAISS
+    Expander <--> Neo4j
 ```
 
 ## Core Components
 
-### 1. Bug Localization Pipeline (`bug_localization.py`)
-The core RAG retrieval pipeline for candidate identification:
-
-1. **Issue Processing**: Preprocesses issue title and body
-2. **Query Generation**: LLM generates semantic search query from issue
-3. **Dense Retrieval**: Retrieves top-k candidate entities (Files, Classes, and Functions) using UnixCoder embeddings
-4. **Graph Enrichment**: Adds callers/callees context from Neo4j and consistently ensures parent context (e.g., File for a Function)
-5. **LLM Selection**: GPT-4o/Gemini selects top-n most likely buggy entities with reasoning
-6. **Return**: Returns ranked list of candidates (top-selected entities + remaining candidates)
+### 1. BugLocalizationAgent (`agent.py`)
+The intelligent core built on **LangGraph**. It replaces the legacy linear pipeline with a stateful agent:
+- **Planner Node**: Breaks down the issue into multiple semantic search queries.
+- **Retriever Node**: Executes queries against the Jina embedding index.
+- **Expander Node**: Crawls the Knowledge Graph (1-hop `CALLS` relationships) to find contextually relevant code not found by keywords.
+- **Selector Node**: Uses LLM to reason over the expanded set and identify the root cause.
 
 ### 2. Knowledge Base Components
 
-#### Vector Store (`retriever.py` + FAISS)
-- Stores embeddings of all Files, Classes, and Functions in the repository
-- Uses Microsoft's UnixCoder model
-- Enables semantic similarity search
+#### Vector Store (`vector_store.py` + FAISS)
+- Stores embeddings of Files, Classes, and Functions.
+- **Model**: `jinaai/jina-embeddings-v2-base-code` (8k context window).
+- Supports semantic search with dot-product similarity.
 
 #### Graph Store (`graph_store.py` + Neo4j)
-- Stores code structure: Files, Classes, Functions, Calls
-- Provides caller/callee relationships
-- Enables graph-based context enrichment
+- Stores structural relationships: `CONTAINS`, `CALLS`, `INHERITS`.
+- Enables "Graph-Augmented" retrieval (finding callers of a buggy function).
 
 #### Repository Indexer (`indexer.py`)
-- Parses Python/Java/Kotlin code using tree-sitter
-- Extracts functions and their relationships
-- Generates embeddings and stores in FAISS
-- Builds knowledge graph in Neo4j
+- Hybrid indexer using `tree-sitter`.
+- Generates AST-based chunks (Function/Class skeletons).
+- Populates both FAISS (Vectors) and Neo4j (Graph) simultaneously.
 
 ### 3. LLM Service (`llm_service.py`)
-Provides LLM capabilities:
-- **Query Generation**: Creates optimized search queries
-- **Function Selection**: Identifies root cause entities (Files, Classes, Functions)
-- **Analysis**: Explains the bug
-- **Patch Generation**: Suggests fixes
-
-Supports: GPT-4o, Gemini 2.0 Flash
+Provides model-agnostic LLM access (GPT-4o, Gemini) with advanced capabilities:
+- **Chain-of-Thought Patching**: Generates patches + commit messages using a 5-step reasoning process (Strategy -> Rationale -> Design -> Verification -> Quality).
+- **JSON Enforcement**: Ensures outputs are strictly structured for automation.
+- **Retry Logic**: Exponential backoff handling for API limits.
 
 ### 4. Workflow Manager (`workflow_manager.py`)
-LangGraph-based orchestration (main flow for GitHub app):
-- Orchestrates full bug localization workflow in 3 steps
-- Step 1: Calls `BugLocalization` for candidate retrieval and selection
-- Step 2: Extracts analysis/reasoning from LLM-selected functions
-- Step 3: Generates patch suggestions using LLM
-- Returns complete results with localization, analysis, and patches
-
-**Note**: The GitHub integration uses `WorkflowManager` via the `BugLocalization()` API function in `knowledgeBase.py`.
+The orchestrator that binds the Agent to the Application layer:
+1.  **State Management**: Initializes agent state with repository context.
+2.  **Execution**: Invokes the `BugLocalizationAgent` graph.
+3.  **Patching**: Feeds the localized functions to the CoT Patch Generator.
+4.  **Result Formatting**: Packages the analysis and patch for the user.
 
 ## Data Flow
 
 ### Indexing Phase
 ```
-Repository → Parse (tree-sitter) → Extract Files, Classes, Functions →
-  ├─ Generate Embeddings (UnixCoder) → FAISS
-  └─ Build Graph (relationships) → Neo4j
+Repository → Parse (tree-sitter) → Extract AST Nodes →
+  ├─ Embedding (Jina v2) → FAISS
+  └─ Build Knowledge Graph → Neo4j
 ```
 
-### Localization Phase
+### Localization & Repair Phase
 ```
-GitHub Issue →
-  1. Generate Search Query (LLM) →
-  2. Embed Query (UnixCoder) →
-  3. Retrieve Candidates (FAISS, k=20) →
-  4. Enrich with Graph Context (Neo4j) →
-  5. LLM Selection (Top 5) →
-  6. Analysis & Patch (LLM) →
-GitHub Comment
+GitHub Issue → WorkflowManager →
+  [Agent]
+  1. Planner: "Search for X, Y, Z"
+  2. Retriever: Vector Search (FAISS) → Top Candidates
+  3. Expander: Get Neighbors (Neo4j) → Expanded Candidates
+  4. Selector: LLM Reasoning → Root Cause Function
+  [Patching]
+  5. CoT Patch Generator: Strategy -> Verify -> JSON Patch
+→ GitHub Comment
 ```
 
 ## Technology Stack
@@ -130,27 +101,27 @@ GitHub Comment
 | Component | Technology | Purpose |
 |:---|:---|:---|
 | **Language** | Python 3.11+ | Core implementation |
+| **Agent Framework** | LangGraph | State machine orchestration |
 | **LLM** | GPT-4o / Gemini 2.0 | Reasoning and generation |
-| **Embeddings** | UnixCoder | Code embeddings |
+| **Embeddings** | Jina Embeddings v2 | 8k context code embeddings |
 | **Vector Search** | FAISS | Similarity search |
 | **Graph DB** | Neo4j | Knowledge graph |
 | **Parsing** | tree-sitter | AST extraction |
-| **Orchestration** | LangGraph | Workflow management |
 | **Web Framework** | Flask | Webhook handling |
 
 ## Evaluation Results
 
 On the [LCA Bug Localization benchmark](https://huggingface.co/datasets/JetBrains-Research/lca-bug-localization):
 
-**File-Level Metrics (k=3)**:
-- Hit@3: **76.67%**
-- Precision@3: **35.56%**
-- Recall@3: **50.06%**
-- F1@3: **38.47%**
+**File-Level**:
+- Hit@3: **59.52%**
+- Precision@5: **56.75%**
+- Recall@5: **43.00%**
+- F1@5: **48.93%**
 
-**Function-Level Metrics (k=3)**:
-- Hit@3: **13.33%**
-- F1@3: **5.24%**
+**Function-Level**:
+- Hit@3: **54.76%**
+- F1@5: **42.79%**
 
 ## Storage
 

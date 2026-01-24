@@ -68,6 +68,8 @@ def clone_repo(repo_url, target_dir):
         return True
     except subprocess.CalledProcessError as e:
         logger.error(f"Failed to clone {repo_url}: {e}")
+        if e.stderr:
+            logger.error(f"Git Clone Stderr: {e.stderr.decode('utf-8', errors='replace') if isinstance(e.stderr, bytes) else e.stderr}")
         return False
 
 def ensure_historical_state(repo_path, base_sha):
@@ -197,7 +199,7 @@ def evaluate():
     results = []
     
     # Group by repository to minimize cloning/indexing
-    repos = df['Repository'].unique()[:5]
+    repos = df['Repository'].unique()
     
     for repo_name in repos:
         repo_issues = df[df['Repository'] == repo_name]
@@ -234,17 +236,33 @@ def evaluate():
             ground_truth_funcs = ast.literal_eval(issue_data.get('Changed Functions', '[]'))
             
             base_sha = issue_data.get('Base SHA')
+            if pd.isna(base_sha):
+                base_sha = None
+            else:
+                base_sha = str(base_sha).strip()
             
+            # --- INDEX CHECK ---
+            # Check if index exists for this version before doing anything expensive
+            # safe_repo_name = repo_name.replace('/', '_')
+            # target_index_dir = os.path.join(Config.KNOWLEDGE_BASE_DIR, safe_repo_name, base_sha)
+            # index_file = os.path.join(target_index_dir, "index.faiss")
+            
+            # if not os.path.exists(index_file):
+            #     logger.info(f"Skipping {repo_name} at {base_sha}: Not found in index at {index_file}")
+            #     continue
+                
             # --- HISTORICAL CONSISTENCY CHECK ---
             state_changed = ensure_historical_state(repo_dir, base_sha)
             
             # Ensure index is up to date (Indexer handles versioning internally now)
             try:
-                indexer.index_repository(repo_dir, repo_name)
+                # Indexer will skip if valid index exists for this SHA
+                indexer.index_repository(repo_dir, repo_name) 
             except Exception as e:
                 logger.error(f"Indexing/Verification failed for {repo_name} at {base_sha}: {e}")
                 continue
             
+            # double check we are good to go
             # --- END HISTORICAL CHECK ---
 
             # Now Localize
@@ -256,11 +274,17 @@ def evaluate():
                 
                 # Run localization
                 selected_funcs, all_candidates, token_usage = bug_localizer.localize(issue_title, issue_body)
+                
+                # --- PATCH GENERATION (Verification of CoT) ---
+                generated_patch = ""
+                # Patch generation disabled by user request
+
             except Exception as e:
-                logger.error(f"Error localizing issue {issue_data['Issue URL']}: {e}") # Changed row['Issue URL'] to issue_data['Issue URL']
+                logger.error(f"Error localizing issue {issue_data['Issue URL']}: {e}")
                 selected_funcs = []
                 all_candidates = []
                 token_usage = {}
+                generated_patch = ""
             
             duration = time.time() - start_time
             
@@ -276,7 +300,11 @@ def evaluate():
             if selected_funcs:
                 for res in selected_funcs[:Config.LLM_SELECTION_COUNT]:  
                     # Files
-                    fpath = res['file_path']
+                    fpath = res.get('file_path') or res.get('path')
+                    if not fpath:
+                        logger.warning(f"Skipping result with no file path: {res.get('name', 'UNKNOWN')}")
+                        continue
+                    
                     if fpath not in seen_files:
                         pred_files.append(fpath)
                         seen_files.add(fpath)
@@ -432,7 +460,8 @@ def evaluate():
                 'Output Tokens': output_tokens,
                 'Total Tokens': total_tokens,
                 'Duration': duration,
-                'Analysis': selected_funcs[0].get('analysis', '') if selected_funcs else ''
+                'Analysis': selected_funcs[0].get('analysis', '') if selected_funcs else '',
+                'Generated Patch': generated_patch
             }
             results.append(result_row)
             

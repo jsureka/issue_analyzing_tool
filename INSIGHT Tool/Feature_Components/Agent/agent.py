@@ -46,45 +46,18 @@ class BugLocalizationAgent:
         self.repo_name = repo_name
         self.repo_dir = repo_dir
         
-        # Initialize resources
-        # Use Config values implicitly or load them?
-        # Assuming Config is available globally or via imports in sub-components
         from config import Config
+        self.config = Config
         
         self.llm_service = LLMService()
-        
-        # Initialize knowledge base components
-        # Note: VectorStore/GraphStore/Embedder need to be initialized similarly to existing BugLocalization
         self.graph_store = GraphStore(Config.NEO4J_URI, Config.NEO4J_USER, Config.NEO4J_PASSWORD)
         self.vector_store = VectorStore()
         
-        # Load indices specific to this repo (using SHA logic? Or generic generic path logic?)
-        # IMPORTANT: The Indexer puts them in a SHA-specific folder.
-        # But here we might not know the SHA unless passed.
-        # Ideally, we should receive the SHA or path.
-        # However, evaluate_bug_localization checks indexer results.
-        # We'll assume the evaluation script ensures the index exists.
-        # But we need to LOAD it.
-        # If we use the "latest" logic or expect exact path?
-        # For now, let's look for the *latest* valid index in the repo folder or assume standard path.
-        # Given the refactor in indexer.py, we put it in repo_name_sha/commit_sha.
-        # We need to find it.
-        
-        # HACK: For this implementation, we'll try to find the index path dynamically
-        # or rely on the fact that evaluate script runs ensuring index is present.
-        # We'll assume the VectorStore needs to load the index file.
-        # Let's search for "index.faiss" in Data_Storage/KnowledgeBase/{repo_name_safe}/**/*
-        # Or simplistic approach: The caller should pass the index path?
-        # The current signature is (repo_name, repo_dir).
-        # We'll modify it to try to find the index.
-        
-        self.index_base_dir = Config.KNOWLEDGE_BASE_DIR # "Data_Storage/KnowledgeBase"
-        
-        # Initialize attributes
+        self.index_base_dir = Config.KNOWLEDGE_BASE_DIR
+
         self.embedder = None
         self._load_resources()
         
-        # Tools
         if self.embedder:
             self.vector_tool = VectorSearchTool(self.vector_store, self.embedder, self.repo_name)
         else:
@@ -94,7 +67,6 @@ class BugLocalizationAgent:
         self.graph_neighbor_tool = GraphNeighborsTool(self.graph_store, self.repo_name)
         self.graph_context_tool = GraphContextTool(self.graph_store, self.repo_name)
         
-        # Build Graph
         self.workflow = self._build_workflow()
         
     def _load_resources(self):
@@ -104,43 +76,64 @@ class BugLocalizationAgent:
             safe_repo_name = self.repo_name.replace('/', '_')
             repo_base = Path(self.index_base_dir) / safe_repo_name
             
-            logger.info(f"Looking for index in: {repo_base}")
-            
-            # Find the latest index (by mtime or just first found)
-            # Since indexer uses commit_sha, we might have multiple.
-            # We'll pick the most recent.
             if not repo_base.exists():
                 logger.error(f"No index directory found for {self.repo_name} at {repo_base}")
-                # Debugging: List parent directory
-                parent = Path(self.index_base_dir)
-                if parent.exists():
-                    logger.info(f"Parent directory {parent} contents: {[p.name for p in parent.iterdir()]}")
-                else:
-                    logger.error(f"Parent directory {parent} does not exist!")
                 return
 
-            # Find all index.faiss files
             files = list(repo_base.glob("**/index.faiss"))
             if not files:
                  logger.error(f"No index.faiss found in {repo_base}")
-                 logger.info(f"Directory contents: {[p.name for p in repo_base.iterdir()]}")
                  return
                  
-            # Sort by modification time desc
+            # Use most recent index
             latest_index = sorted(files, key=lambda f: f.stat().st_mtime, reverse=True)[0]
             metadata_path = latest_index.parent / "metadata.json"
             
-            self.embedder = CodeEmbedder() # Default model
+            self.embedder = CodeEmbedder()
             self.embedder.load_model()
             
-            self.vector_store.create_index() # Initialize structure
+            self.vector_store.create_index()
             self.vector_store.load_index(str(latest_index))
             self.vector_store.load_metadata(str(metadata_path))
             
-            logger.info(f"Loaded index from {latest_index}")
+            logger.info(f"BugLocalizationAgent loaded index from {latest_index}")
             
         except Exception as e:
             logger.error(f"Failed to load resources: {e}")
+
+    def _get_source_code(self, candidate: Dict) -> str:
+        """Fetch source code for a candidate from disk"""
+        try:
+            file_path = candidate.get('file_path') or candidate.get('path')
+            if not file_path:
+                return ""
+                
+            # Handle potential path issues. file_path should be relative
+            import os
+            full_path = os.path.join(self.repo_dir, file_path)
+            
+            if not os.path.exists(full_path):
+                # Try finding it if path is weird?
+                return ""
+                
+            start_line = candidate.get('start_line')
+            end_line = candidate.get('end_line')
+            
+            with open(full_path, 'r', encoding='utf-8', errors='ignore') as f:
+                lines = f.readlines()
+                
+            if start_line and end_line:
+                # 1-based indexing
+                s = max(0, start_line - 1)
+                e = min(len(lines), end_line)
+                return "".join(lines[s:e])
+            else:
+                # Fallback to first 50 lines if no range?
+                return "".join(lines[:50])
+                
+        except Exception as e:
+            logger.warning(f"Failed to read source for {candidate.get('name')}: {e}")
+            return ""
 
     def _build_workflow(self) -> Any:
         workflow = StateGraph(AgentState)
@@ -279,11 +272,11 @@ class BugLocalizationAgent:
             candidate_str += f"Name: {c.get('name')}\n"
             candidate_str += f"File: {c.get('file_path') or c.get('path')}\n" # normalize keys
             candidate_str += f"Signature: {c.get('signature')}\n"
-            # Include body snippet? 
-            # VectorStore metadata might not have body. 
-            # We assume metadata has minimal info or we need to re-read file?
-            # For efficiency we skip body here unless stored. 
-            # If docstring exists:
+            # Include body snippet
+            code_snippet = self._get_source_code(c)
+            if code_snippet:
+                candidate_str += f"Code:\n{code_snippet}\n"
+            
             if c.get('docstring'):
                 candidate_str += f"Docstring: {c.get('docstring')}\n"
             candidate_str += "\n"

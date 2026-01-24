@@ -6,6 +6,7 @@ import logging
 from typing import TypedDict, List, Dict, Any, Annotated
 from langgraph.graph import StateGraph, END
 import operator
+import os
 
 from .llm_service import LLMService
 from .retriever import DenseRetriever
@@ -49,8 +50,8 @@ class WorkflowManager:
     
     def __init__(self):
         self.llm_service = LLMService()
-        from .bug_localization import BugLocalization
-        self.bug_localization = None  # Lazy init per repo
+        # self.bug_localization will be lazy initialized
+        self.bug_localization = None
         
         self.workflow = self._build_graph()
         
@@ -75,17 +76,18 @@ class WorkflowManager:
         """Node: Process the issue text"""
         logger.info("Workflow Step: Processing Issue")
         
-        # Initialize BugLocalization if needed
+        # Initialize BugLocalizationAgent if needed
         if not self.bug_localization or self.bug_localization.repo_name != state["repo_name"]:
-            from .bug_localization import BugLocalization
-            self.bug_localization = BugLocalization(state["repo_name"], state["repo_path"])
+            from ..Agent.agent import BugLocalizationAgent
+            self.bug_localization = BugLocalizationAgent(state["repo_name"], state["repo_path"])
             
         return {"processed_issue": {}}
 
     def localize_bug(self, state: GraphState) -> Dict[str, Any]:
-        """Node: Localize bug using RAG pipeline"""
-        logger.info("Workflow Step: Localizing Bug (RAG Pipeline)")
+        """Node: Localize bug using Agentic RAG pipeline"""
+        logger.info("Workflow Step: Localizing Bug (Agentic Pipeline)")
         
+        # Agent.localize returns (selected_functions, all_candidates, token_usage)
         selected_functions, _, _ = self.bug_localization.localize(
             state["issue_title"], 
             state["issue_body"]
@@ -96,12 +98,13 @@ class WorkflowManager:
         ANALYSIS_LIMIT = 3
         top_candidates = selected_functions[:ANALYSIS_LIMIT]
         
-        has_reasoning = any(f.get('llm_reasoning') for f in top_candidates)
+        # Agent might populate 'analysis' field directly in the candidate dict
+        has_reasoning = any(f.get('analysis') or f.get('llm_reasoning') for f in top_candidates)
         
         if has_reasoning:
             for idx, func in enumerate(top_candidates, 1):
-                analysis += f"{idx}. `{func['name']}` in `{func['file_path']}`\n"
-                reason = func.get('llm_reasoning', 'Selected as likely buggy function')
+                analysis += f"{idx}. `{func['name']}` in `{func.get('file_path', func.get('path'))}`\n"
+                reason = func.get('analysis') or func.get('llm_reasoning', 'Selected as likely buggy function')
                 analysis += f"   - {reason}\n\n"
         else:
             # Fallback: Generate analysis using LLM if reasoning is missing
@@ -115,7 +118,7 @@ class WorkflowManager:
         return {
             "candidate_functions": selected_functions,
             "analysis": analysis,
-            "hypothesis": ""  # Removed duplication
+            "hypothesis": "" 
         }
 
     def generate_patch(self, state: GraphState) -> Dict[str, Any]:
@@ -129,9 +132,24 @@ class WorkflowManager:
         
         if state["candidate_functions"]:
             top_func = state["candidate_functions"][0]
-            target_file = top_func["file_path"]
+            target_file = top_func.get("file_path") or top_func.get("path") or ""
             target_code = top_func.get("code", "")
             
+            # If code is missing (likely finding from index), read from disk
+            if not target_code and target_file and state.get("repo_path"):
+                 try:
+                     # target_file might be relative or absolute. 
+                     # Indexer stores relative paths usually.
+                     full_path = target_file
+                     if not os.path.isabs(target_file):
+                          full_path = os.path.join(state["repo_path"], target_file)
+                     
+                     if os.path.exists(full_path):
+                         with open(full_path, 'r', encoding='utf-8', errors='ignore') as f:
+                             target_code = f.read()
+                 except Exception as e:
+                     logger.warning(f"Failed to read target file {target_file} for patch generation: {e}")
+
         patch = self.llm_service.generate_patch(
             state["issue_title"],
             state["issue_body"],
