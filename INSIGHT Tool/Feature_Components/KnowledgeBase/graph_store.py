@@ -478,6 +478,65 @@ class GraphStore:
             logger.error(f"Failed to get function neighbors: {e}")
             return {}
 
+    def get_siblings(self, function_id: str) -> List[Dict[str, Any]]:
+        """
+        Get sibling functions (functions in the same class, or same file if no class).
+        
+        Args:
+            function_id: ID of the function
+            
+        Returns:
+            List of sibling function nodes
+        """
+        self._ensure_connected()
+        
+        try:
+            with self.driver.session() as session:
+                # 1. Try Same Class
+                class_query = """
+                MATCH (f:Function {id: $fid})<-[:CONTAINS]-(c:Class)-[:CONTAINS]->(sibling:Function)
+                WHERE sibling.id <> $fid
+                RETURN sibling
+                """
+                result = session.run(class_query, fid=function_id)
+                siblings = []
+                for record in result:
+                    node = record['sibling']
+                    if node:
+                        siblings.append(dict(node))
+                
+                if siblings:
+                    return siblings
+                
+                # 2. If no class parent or no class siblings, try Same File (but top-level only? or all in file?)
+                # If function is top-level in file, we want other top-level functions.
+                # If function is in class, we prioritized class siblings above.
+                # Let's just get all functions in the same file as fallback or complementary?
+                # For safety, let's strictly restrict to "Same Parent" logic.
+                
+                file_query = """
+                MATCH (f:Function {id: $fid})
+                OPTIONAL MATCH (f)<-[:CONTAINS]-(parent)
+                WITH parent, f
+                WHERE parent IS NOT NULL
+                MATCH (parent)-[:CONTAINS]->(sibling:Function)
+                WHERE sibling.id <> $fid
+                RETURN sibling
+                """
+                result = session.run(file_query, fid=function_id)
+                for record in result:
+                    node = record['sibling']
+                    if node:
+                        # Avoid duplicates if we ran class query (but we returned early)
+                        d = dict(node)
+                        if 'id' not in d: d['id'] = node.element_id
+                        siblings.append(d)
+                        
+                return siblings
+        except Exception as e:
+            logger.error(f"Failed to get siblings: {e}")
+            return []
+
     def get_function_neighbors_with_paths(self, function_ids: List[str]) -> Dict[str, Dict[str, List[Dict[str, Any]]]]:
         """
         Get immediate neighbors with file paths for hydration.

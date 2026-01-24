@@ -93,27 +93,15 @@ class WorkflowManager:
             state["issue_body"]
         )
         
-        # Format concise analysis from top 3 functions only
+        # Format concise analysis from top candidates (agent already provides analysis)
         analysis = ""
         ANALYSIS_LIMIT = 3
         top_candidates = selected_functions[:ANALYSIS_LIMIT]
         
-        # Agent might populate 'analysis' field directly in the candidate dict
-        has_reasoning = any(f.get('analysis') or f.get('llm_reasoning') for f in top_candidates)
-        
-        if has_reasoning:
-            for idx, func in enumerate(top_candidates, 1):
-                analysis += f"{idx}. `{func['name']}` in `{func.get('file_path', func.get('path'))}`\n"
-                reason = func.get('analysis') or func.get('llm_reasoning', 'Selected as likely buggy function')
-                analysis += f"   - {reason}\n\n"
-        else:
-            # Fallback: Generate analysis using LLM if reasoning is missing
-            logger.info("Reasoning missing for top candidates. Generating analysis via LLM...")
-            analysis = self.llm_service.generate_candidate_analysis(
-                state["issue_title"],
-                state["issue_body"],
-                top_candidates
-            )
+        for idx, func in enumerate(top_candidates, 1):
+            analysis += f"{idx}. `{func['name']}` in `{func.get('file_path', func.get('path'))}`\n"
+            reason = func.get('analysis') or func.get('llm_reasoning', 'Selected as likely buggy function')
+            analysis += f"   - {reason}\n\n"
             
         return {
             "candidate_functions": selected_functions,

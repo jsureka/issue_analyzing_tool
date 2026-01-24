@@ -142,7 +142,7 @@ class BugLocalizationAgent:
         workflow.add_node("planner", self.planner_node)
         workflow.add_node("retriever", self.retriever_node)
         workflow.add_node("expander", self.expander_node)
-        workflow.add_node("selector", self.selector_node)
+        workflow.add_node("generator", self.generator_node)
         
         # Set entry point
         workflow.set_entry_point("planner")
@@ -150,112 +150,298 @@ class BugLocalizationAgent:
         # Edges
         workflow.add_edge("planner", "retriever")
         workflow.add_edge("retriever", "expander")
-        workflow.add_edge("expander", "selector")
-        workflow.add_edge("selector", END)
+        workflow.add_edge("expander", "generator")
+        workflow.add_edge("generator", END)
         
         return workflow.compile()
 
     # --- Nodes ---
     
     def planner_node(self, state: AgentState) -> Dict:
-        """Analyze issue and plan search queries"""
+        """Analyze issue and plan search queries (Structured)"""
         logger.info("--- Planner Node ---")
         issue_text = f"Title: {state['issue_title']}\nDescription: {state['issue_body']}"
         
         system_msg = """You are a senior developer debugging a codebase. 
-        Analyze the issue report and generate specific search queries to find the code responsible for the bug.
-        Focus on identifying unique keywords, method names, or class names mentioned in the issue.
-        Return 3 distinct search queries."""
+        Analyze the issue report and generate a structured search plan.
         
-        prompt = f"Issue:\n{issue_text}\n\nProvide 3 search queries separated by newlines."
+        Return a JSON object with:
+        {
+            "semantic_queries": ["natural language description of functionality"],
+            "lexical_queries": ["precise error messages", "function names", "constants"],
+            "must_include_tokens": ["token1", "token2"] (Optional: tokens that MUST be present in valid results)
+        }
+        """
         
-        response = self.llm_service.get_response(prompt, system_message=system_msg)
+        prompt = f"Issue:\n{issue_text}\n\nProvide the search plan in JSON."
         
+        response = self.llm_service.get_response(prompt, system_message=system_msg, json_mode=True)
+        
+        # Parse JSON
+        plan = {"semantic_queries": [], "lexical_queries": [], "must_include_tokens": []}
+        try:
+            start_idx = response.find('{')
+            if start_idx != -1:
+                plan = json.JSONDecoder().raw_decode(response[start_idx:])[0]
+        except Exception as e:
+            logger.error(f"Failed to parse Planner JSON: {e}")
+            # Fallback
+            return {"current_plan": response, "messages": [AIMessage(content="Plan parse failed, check logs.")]}
+
         # Update token usage
         self._update_tokens(state, len(prompt.split()), len(response.split()))
         
+        # Store structured plan in state (as string or dict? State definition has string 'current_plan')
+        # We'll serialize it or add a new state key if we could, but let's just serialize to string for compatibility 
+        # or rely on the next node parsing it? 
+        # Better: Update AgentState definition to hold 'structured_plan'. 
+        # Since I can't easily change the TypedDict definition in one go without replacing the whole file,
+        # I will store it in 'current_plan' as a JSON string.
+        
         return {
-            "current_plan": response,
-            "messages": [AIMessage(content=f"Plan:\n{response}")]
+            "current_plan": json.dumps(plan),
+            "messages": [AIMessage(content=f"Plan generated: {len(plan.get('semantic_queries',[]))} semantic, {len(plan.get('lexical_queries',[]))} lexical.")]
         }
 
     def retriever_node(self, state: AgentState) -> Dict:
-        """Execute vector search based on plan"""
-        logger.info("--- Retriever Node ---")
+        """Execute Hybrid Search (Dense + Sparse + RRF)"""
+        logger.info("--- Retriever Node (Hybrid) ---")
         
         if not self.embedder or not self.vector_tool:
-             logger.warning("Embedder/VectorTool not available. Skipping retrieval.")
-             return {"candidate_functions": [], "messages": [AIMessage(content="Vector search unavailable.")]}
+             logger.warning("Embedder/VectorStore unavailable. Skipping retrieval.")
+             return {"candidate_functions": [], "messages": [AIMessage(content="Search unavailable.")]}
 
-        queries = state['current_plan'].split('\n')
-        queries = [q.strip() for q in queries if q.strip()]
+        # Parse plan
+        try:
+            plan = json.loads(state['current_plan'])
+        except:
+            # Fallback for legacy string plans
+            plan = {"semantic_queries": state['current_plan'].split('\n'), "lexical_queries": [], "must_include_tokens": []}
+
+        semantic_queries = plan.get('semantic_queries', [])
+        lexical_queries = plan.get('lexical_queries', [])
+        must_include = [t.lower() for t in plan.get('must_include_tokens', [])]
         
-        candidates = []
-        seen_ids = set()
+        candidates = {} # Map id -> {meta, score}
         
-        for q in queries[:3]: # Limit to 3 queries
-            # Use tool logic directly or call tool
-            # self.vector_tool._run(q) return string, we want objects.
-            # Direct usage of store is cleaner since we are inside the agent logic
-            
+        # 1. Process Semantic Queries (Hybrid: Dense + BM25)
+        for q in semantic_queries:
+            if not q: continue
             try:
+                # Embed for Dense
                 embeddings = self.embedder.embed_batch([q])
-                if len(embeddings) == 0:
-                     continue
+                if len(embeddings) == 0: continue
                 q_emb = embeddings[0]
-                indices, scores, metadata = self.vector_store.search(q_emb, k=10)
                 
-                for meta in metadata:
-                    if meta.get('id') and meta['id'] not in seen_ids:
-                        candidates.append(meta)
-                        seen_ids.add(meta['id'])
+                # Hybrid Search
+                indices, scores, metadata = self.vector_store.search_hybrid(q_emb, q, k=15)
+                
+                for meta, score in zip(metadata, scores):
+                    mid = meta.get('id')
+                    if mid:
+                        if mid not in candidates:
+                            candidates[mid] = {'meta': meta, 'score': score}
+                        else:
+                            # Keep max score
+                            if score > candidates[mid]['score']:
+                                candidates[mid]['score'] = score
             except Exception as e:
-                logger.error(f"Search failed for query '{q}': {e}")
+                logger.error(f"Semantic search failed for '{q}': {e}")
+
+        # 2. Process Lexical Queries
+        for q in lexical_queries:
+             if not q: continue
+             try:
+                embeddings = self.embedder.embed_batch([q])
+                if len(embeddings) == 0: continue
+                q_emb = embeddings[0]
                 
-        logger.info(f"Retrieved {len(candidates)} unique candidates")
+                indices, scores, metadata = self.vector_store.search_hybrid(q_emb, q, k=15)
+                
+                for meta, score in zip(metadata, scores):
+                    mid = meta.get('id')
+                    if mid:
+                        if mid not in candidates:
+                            candidates[mid] = {'meta': meta, 'score': score}
+                        else:
+                            if score > candidates[mid]['score']:
+                                candidates[mid]['score'] = score
+             except Exception as e:
+                logger.error(f"Lexical search failed for '{q}': {e}")
+                
+        
+        # Sort by score (Initial Ranking)
+        sorted_candidates = sorted(candidates.values(), key=lambda x: x['score'], reverse=True)
+        final_list = []
+        for item in sorted_candidates:
+            c = item['meta'].copy()
+            c['score'] = item['score']
+            final_list.append(c)
+            
+        logger.info(f"Candidates before filtering: {len(final_list)}")
+        
+        # 3. Filter by Must-Include Tokens (Post-processing)
+        filtered_candidates = []
+        if must_include:
+            logger.info(f"Filtering results by tokens: {must_include}")
+            
+            def check_tokens(c, mode='all'):
+                meta_text = f"{c.get('name','')} {c.get('file_path','')} {c.get('signature','')} {c.get('docstring','')}".lower()
+                tokens_found = [t for t in must_include if t in meta_text]
+                if mode == 'all' and len(tokens_found) == len(must_include): return True
+                if mode == 'any' and len(tokens_found) > 0: return True
+                try:
+                    code = self._get_source_code(c).lower()
+                    if code:
+                         tokens_found_src = [t for t in must_include if t in code]
+                         if mode == 'all' and len(tokens_found_src) == len(must_include): return True
+                         if mode == 'any' and len(tokens_found_src) > 0: return True
+                except Exception:
+                    pass
+                return False
+
+            filtered_candidates = [c for c in final_list if check_tokens(c, 'all')]
+            
+            if not filtered_candidates:
+                logger.warning("Strict filter returned 0 results. Retrying with ANY token match...")
+                filtered_candidates = [c for c in final_list if check_tokens(c, 'any')]
+                
+            if not filtered_candidates:
+                 logger.warning("All filters failed. Returning top unfiltered candidates.")
+                 filtered_candidates = final_list
+        else:
+            filtered_candidates = final_list
+
+        logger.info(f"Retrieved {len(filtered_candidates)} candidates after token filtering")
+        
+        # 4. LLM Reranking (Take Top 50 -> Rank -> Top 15)
+        # Only rerank if we have enough candidates to justify it
+        if len(filtered_candidates) > 5:
+            rerank_pool = filtered_candidates[:50] # Rerank top 50
+            logger.info(f"Reranking top {len(rerank_pool)} candidates with LLM...")
+            try:
+                final_ranked = self._rerank_candidates(state['issue_title'], state['issue_body'], rerank_pool)
+                # Take top 15 from reranked
+                final_candidates = final_ranked[:15]
+                logger.info("LLM Reranking complete.")
+            except Exception as e:
+                logger.error(f"Reranking failed: {e}. Falling back to original order.")
+                final_candidates = filtered_candidates[:15]
+        else:
+            final_candidates = filtered_candidates
+
+        logger.info(f"Final retrieved count: {len(final_candidates)}")
+
         return {
-            "candidate_functions": candidates,
-            "messages": [AIMessage(content=f"Retrieved {len(candidates)} candidates.")]
+            "candidate_functions": final_candidates,
+            "messages": [AIMessage(content=f"Retrieved {len(final_candidates)} candidates.")]
         }
 
+    def _rerank_candidates(self, issue_title: str, issue_body: str, candidates: List[Dict]) -> List[Dict]:
+        """Use LLM to rerank candidates by relevance to the issue."""
+        if not candidates: return []
+        
+        # Prepare list for prompt
+        cand_text = ""
+        for i, c in enumerate(candidates):
+            # Include minimal info to save tokens: Name, File, Docstring (truncated)
+            doc = (c.get('docstring') or "").split('\n')[0][:100]
+            cand_text += f"[{i}] {c.get('name')} ({c.get('file_path')})\n    Doc: {doc}\n"
+        
+        system_msg = """You are a Code Retrieval Reranker.
+        Rank the candidates based on their relevance to the Issue.
+        Prioritize functions that implement the logic described or are likely locations of the bug.
+        Ignore irrelevant files (e.g. tests, cli, documentation) unless the issue specifically targets them.
+        Return ONLY a JSON list of indices in order of relevance, e.g. [5, 0, 12, ...].
+        """
+        
+        prompt = f"Issue: {issue_title}\n{issue_body[:500]}\n\nCandidates:\n{cand_text}\n\nRank indices:"
+        
+        response = self.llm_service.get_response(prompt, system_message=system_msg, json_mode=True)
+        
+        try:
+             # Extract list
+             import ast
+             # Try simple parsing first in case not pure JSON
+             start = response.find('[')
+             end = response.rfind(']') + 1
+             if start != -1 and end != -1:
+                 indices = json.loads(response[start:end])
+             else:
+                 indices = []
+             
+             ranked_candidates = []
+             seen_idx = set()
+             
+             # Add valid indices
+             for idx in indices:
+                 if isinstance(idx, int) and 0 <= idx < len(candidates):
+                     ranked_candidates.append(candidates[idx])
+                     seen_idx.add(idx)
+             
+             # Add remaining candidates at the end
+             for i, c in enumerate(candidates):
+                 if i not in seen_idx:
+                     ranked_candidates.append(c)
+                     
+             return ranked_candidates
+        except Exception as e:
+            logger.error(f"Failed to parse rerank response: {e}")
+            return candidates
+
     def expander_node(self, state: AgentState) -> Dict:
-        """Expand context using graph (callers/callees)"""
+        """Expand search using Knowledge Graph (Hydrated)"""
         logger.info("--- Expander Node ---")
         candidates = state['candidate_functions']
         
-        # For the top 5 candidates, get neighbors
-        top_candidates = candidates[:5]
-        expanded_candidates = list(candidates) # Copy
-        seen_ids = set(c['id'] for c in candidates)
+        if not self.graph_store:
+            return {"candidate_functions": candidates, "messages": [AIMessage(content="Graph expansion skipped.")]}
+            
+        expanded_candidates = list(candidates) # Start with retrieved
+        seen_ids = set(c['id'] for c in candidates if c.get('id'))
         
-        if not self.graph_store.connect():
-             logger.warning("Graph connection failed, skipping expansion")
-             return {"candidate_functions": candidates}
-
-        for cand in top_candidates:
-            if cand.get('entity_type') == 'function':
-                # Get neighbors
-                neighbors = self.graph_store.get_function_neighbors(cand['id'], "CALLS")
-                for n in neighbors:
-                    if n['id'] not in seen_ids:
-                        # Need to fetch full metadata for neighbor?
-                        # Using dummy/partial metadata for now or query vector store by ID?
-                        # Ideally GraphStore returns enough info.
-                        # Adding basics.
-                        n['entity_type'] = 'function' # Neighbors are functions
-                        # Add to candidates
+        # Expand top k candidates
+        k_expand = 5
+        for seed in candidates[:k_expand]:
+            seed_id = seed.get('id')
+            if not seed_id: continue
+            
+            # 1. Calls/Called (Neighbors)
+            neighbors = self.graph_store.get_function_neighbors(seed_id)
+            
+            # 2. Siblings (Same Class/File) - Critical for "Close Shot" misses
+            siblings = self.graph_store.get_siblings(seed_id)
+            
+            # Combine
+            all_related = neighbors + siblings
+            
+            for n in all_related:
+                nid = n.get('id')
+                if nid and nid not in seen_ids:
+                    # Hydrate metadata from VectorStore
+                    full_meta = self.vector_store.get_metadata_by_id(nid)
+                    if full_meta:
+                        full_meta['entity_type'] = n.get('type', 'function') # Preserve type if useful
+                        # Tag source for debugging
+                        # full_meta['expansion_source'] = 'graph' 
+                        expanded_candidates.append(full_meta)
+                        seen_ids.add(nid)
+                    else:
+                        # If not in vector store, use what we have from graph
+                        n['entity_type'] = 'function' 
                         expanded_candidates.append(n)
-                        seen_ids.add(n['id'])
+                        seen_ids.add(nid)
         
         logger.info(f"Expanded to {len(expanded_candidates)} total candidates")
+         
         return {
             "candidate_functions": expanded_candidates,
             "messages": [AIMessage(content=f"Expanded candidates to {len(expanded_candidates)} using graph.")]
         }
 
-    def selector_node(self, state: AgentState) -> Dict:
-        """Select the final buggy functions using LLM"""
-        logger.info("--- Selector Node ---")
+    def generator_node(self, state: AgentState) -> Dict:
+        """Grounded Generator: Identify bugs with Evidence (Claim-Evidence Mapping)"""
+        logger.info("--- Generator Node ---")
         candidates = state['candidate_functions']
         issue_text = f"Title: {state['issue_title']}\nDescription: {state['issue_body']}"
         
@@ -266,83 +452,145 @@ class BugLocalizationAgent:
         limit = 30 
         sliced_candidates = valid_candidates[:limit]
         
+        # Log candidates sent to LLM for debugging
+        logger.info(f"--- Generator Candidates ({len(sliced_candidates)}) ---")
+        for i, c in enumerate(sliced_candidates):
+             logger.info(f"#{i+1}: {c.get('name')} | {c.get('file_path')} | Score: {c.get('score', 0):.4f}")
+
         candidate_str = ""
         for i, c in enumerate(sliced_candidates):
             candidate_str += f"Candidate {i+1} (ID: {c.get('id')}):\n"
             candidate_str += f"Name: {c.get('name')}\n"
-            candidate_str += f"File: {c.get('file_path') or c.get('path')}\n" # normalize keys
+            candidate_str += f"File: {c.get('file_path') or c.get('path')}\n"
             candidate_str += f"Signature: {c.get('signature')}\n"
+            
             # Include body snippet
             code_snippet = self._get_source_code(c)
             if code_snippet:
                 candidate_str += f"Code:\n{code_snippet}\n"
+            else:
+                 logger.warning(f"No source code found for candidate #{i+1}: {c.get('name')}")
+                 candidate_str += "Code: [Not Available]\n"
             
             if c.get('docstring'):
                 candidate_str += f"Docstring: {c.get('docstring')}\n"
             candidate_str += "\n"
             
-        system_msg = """You are a senior developer. 
-        Given an issue description and a list of candidate functions, select the ones that are most likely responsible for the bug.
+        system_msg = """You are a Lead Investigator validating a bug report.
+        Your task is to identify the root cause function(s) and provide hard EVIDENCE.
         
-        Return a JSON object with the following structure:
+        The code snippets provided are prefixed with [file_path:line_number].
+        For each candidate, check if it contains the bug described.
+        
+        Return a JSON object with the following schema:
         {
-            "selected_ids": [1, 2, ...],  // List of integer IDs of the suspicious candidates (1-based index)
-            "technical_analysis": "Comparison of the issue against the selected code..." // A single short technical analysis summarizing why these files are selected.
+            "analysis_summary": "High-level summary of the bug...",
+            "bug_locations": [
+                {
+                    "candidate_index": 1, 
+                    "confidence": "HIGH" | "MEDIUM" | "LOW",
+                    "reasoning": "Explanation of why this is the bug...",
+                    "evidence": [
+                        {"file": "path/to/file.py", "lines": [10, 11, 12]}
+                    ]
+                }
+            ]
         }
         
-        Do NOT provide reasoning for every file. Provide one overall analysis.
-        If no candidates are relevant, return empty list for selected_ids and explain why in analysis.
+        Rules:
+        1. Only include 'bug_locations' if you are confident. If none found, return empty list.
+        2. 'evidence' must cite specific lines from the provided snippets.
+        3. Do NOT guess. If insufficient evidence, state that in summary.
         """
         
-        prompt = f"Issue:\n{issue_text}\n\nCandidates:\n{candidate_str}\n\nSelect the buggy functions."
+        prompt = f"Issue:\n{issue_text}\n\nCandidates:\n{candidate_str}\n\nGenerate Bug Report JSON."
         
         response = self.llm_service.get_response(prompt, system_message=system_msg, json_mode=True)
         
-        # Parse JSON
         selected = []
         try:
-            # Robust JSON extraction
-            # Find the first '{'
+            # Parse JSON
             start_idx = response.find('{')
-            if start_idx == -1:
-                 # No JSON object found
-                 raise json.JSONDecodeError("No JSON object found", response, 0)
+            if start_idx == -1: raise json.JSONDecodeError("No JSON found", response, 0)
             
-            # Use raw_decode to parse just the JSON part and ignore trailing text
             data, _ = json.JSONDecoder().raw_decode(response[start_idx:])
             
-            indices = data.get('selected_ids', [])
-            analysis = data.get('technical_analysis', '')
+            locations = data.get('bug_locations', [])
+            summary = data.get('analysis_summary', '')
             
-            if isinstance(indices, list):
-                for idx in indices:
-                     if isinstance(idx, int):
-                         actual_idx = idx - 1
-                         if 0 <= actual_idx < len(sliced_candidates):
-                             cand = sliced_candidates[actual_idx]
-                             # Attach analysis to the candidate (or handled globally)
-                             cand['analysis'] = analysis 
-                             selected.append(cand)
-                     elif isinstance(idx, str) and idx.isdigit():
-                         actual_idx = int(idx) - 1
-                         if 0 <= actual_idx < len(sliced_candidates):
-                             cand = sliced_candidates[actual_idx]
-                             cand['analysis'] = analysis
-                             selected.append(cand)
+            for loc in locations:
+                idx = loc.get('candidate_index')
+                if isinstance(idx, int):
+                    actual_idx = idx - 1
+                    if 0 <= actual_idx < len(sliced_candidates):
+                        cand = sliced_candidates[actual_idx]
+                        
+                        # Enrich candidate with RAG output
+                        cand['analysis'] = loc.get('reasoning', '')
+                        cand['confidence'] = loc.get('confidence', '')
+                        cand['evidence'] = loc.get('evidence', [])
+                        
+                        # Append the overall summary too if needed
+                        cand['report_summary'] = summary
+                        
+                        selected.append(cand)
 
-        except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse Selector JSON response: {e}")
+        except Exception as e:
+            logger.error(f"Failed to parse GroundedGen JSON: {e}")
             logger.error(f"Raw response: {response}")
-            # Fallback text parsing logic if needed
-            pass
         
         # Update token usage
         self._update_tokens(state, len(prompt.split()), len(response.split()))
         
         return {
             "selected_functions": selected,
-            "messages": [AIMessage(content=f"Selected {len(selected)} functions.")]
+            "messages": [AIMessage(content=f"Identified {len(selected)} locations with evidence.")]
         }
+
+    def _get_source_code(self, candidate: Dict[str, Any]) -> str:
+        """
+        Retrieve source code for a candidate with line numbers for grounding.
+        Format: [file_path:line_number] code_content
+        """
+        fpath = candidate.get('file_path') or candidate.get('path')
+        if not fpath: return ""
+        
+        # Resolve absolute path
+        # If fpath is absolute, use it. Else join with repo_dir.
+        import os
+        if os.path.isabs(fpath):
+            abs_path = fpath
+        else:
+            # repo_dir might be set in __init__
+            if not self.repo_dir: return ""
+            abs_path = os.path.join(self.repo_dir, fpath)
+            
+        if not os.path.exists(abs_path):
+            return ""
+            
+        try:
+            with open(abs_path, 'r', encoding='utf-8', errors='ignore') as f:
+                lines = f.readlines()
+                
+            start = candidate.get('start_line', 1)
+            end = candidate.get('end_line', len(lines))
+            
+            # 1-based indexing correction
+            start_idx = max(0, start - 1)
+            end_idx = min(len(lines), end)
+            
+            snippet = []
+            for i in range(start_idx, end_idx):
+                line_num = i + 1
+                line_content = lines[i].rstrip()
+                # Format: [path:line] content
+                # Use relative path for brevity in prompt
+                snippet.append(f"[{fpath}:{line_num}] {line_content}")
+                
+            return "\n".join(snippet)
+        except Exception as e:
+            logger.error(f"Error reading source {abs_path}: {e}")
+            return ""
 
     def _update_tokens(self, state: AgentState, input_tokens: int, output_tokens: int):
         if 'token_usage' not in state:

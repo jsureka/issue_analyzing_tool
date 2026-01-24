@@ -359,8 +359,11 @@ def evaluate():
             # Debug: Check if GT is in Retrieved Candidates
             logger.info(f"--- Retrieval Debug (Top-{Config.RETRIEVER_TOP_K}) ---")
             
+            # Normalize retrieved paths for comparison
+            norm_retrieved = [os.path.normpath(r) for r in retrieved_files]
+            
             # Files
-            found_files = [f for f in ground_truth_files if any(r.endswith(f) or f.endswith(r) for r in retrieved_files)]
+            found_files = [f for f in ground_truth_files if any(r.endswith(f) or f.endswith(r) for r in norm_retrieved)]
             missing_files = set(ground_truth_files) - set(found_files) 
             logger.info(f"GT Files Found in Retrieval: {len(found_files)}/{len(ground_truth_files)} -> {found_files}")
             if missing_files:
