@@ -668,24 +668,45 @@ class RepositoryIndexer:
         Returns:
             Dictionary with index status or None if not indexed
         """
-        index_path = self.index_dir / repo_name.replace('/', '_') / "index.faiss"
-        metadata_path = self.index_dir / repo_name.replace('/', '_') / "metadata.json"
+        # Index files are stored in versioned subdirectories: repo_name/commit_sha/index.faiss
+        repo_dir = self.index_dir / repo_name.replace('/', '_')
         
-        if not index_path.exists() or not metadata_path.exists():
+        if not repo_dir.exists():
             return None
+        
+        # Find the latest indexed version (most recently modified commit SHA directory)
+        index_versions = []
+        for subdir in repo_dir.iterdir():
+            if subdir.is_dir():
+                index_path = subdir / "index.faiss"
+                metadata_path = subdir / "metadata.json"
+                if index_path.exists() and metadata_path.exists():
+                    index_versions.append({
+                        'commit_sha': subdir.name,
+                        'index_path': index_path,
+                        'metadata_path': metadata_path,
+                        'last_modified': index_path.stat().st_mtime
+                    })
+        
+        if not index_versions:
+            return None
+        
+        # Get the most recent version
+        latest = max(index_versions, key=lambda x: x['last_modified'])
         
         try:
             # Load metadata to get info
             import json
-            with open(metadata_path, 'r') as f:
+            with open(latest['metadata_path'], 'r') as f:
                 metadata = json.load(f)
             
             return {
                 'indexed': True,
-                'index_path': str(index_path),
-                'metadata_path': str(metadata_path),
+                'index_path': str(latest['index_path']),
+                'metadata_path': str(latest['metadata_path']),
+                'commit_sha': latest['commit_sha'],
                 'total_functions': len(metadata),
-                'last_modified': index_path.stat().st_mtime
+                'last_modified': latest['last_modified']
             }
         except Exception as e:
             logger.error(f"Failed to get index status: {e}")

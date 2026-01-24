@@ -766,78 +766,21 @@ Generate the Chain-of-Thought patch repair JSON following the 5-step process."""
 
     def _format_patch_with_cot(self, data: Dict[str, Any], target_file: str) -> str:
         """
-        Format the patch output with Chain-of-Thought reasoning as structured comments.
+        Format the patch output for GitHub comment.
         
-        This format allows humans to understand the reasoning behind each repair decision,
-        following the transparency principles of ThinkRepair (Yin et al., ISSTA 2024).
+        Only returns the patch section (diff + commit message).
+        Full CoT reasoning is preserved in patch_reasoning for debugging.
         """
         lines = []
-        lines.append("=" * 78)
-        lines.append("CHAIN-OF-THOUGHT PATCH REASONING")
-        lines.append("Methodology: ThinkRepair (Yin et al., ISSTA 2024) + SCoT (Li et al., 2025)")
-        lines.append("=" * 78)
-        lines.append("")
         
-        # Step 1: Objective
-        step1 = data.get('step1_objective', {})
-        lines.append("STEP 1: REPAIR OBJECTIVE AND CONSTRAINTS")
-        lines.append(f"Think: {step1.get('think', 'N/A')}")
-        lines.append(f"- Objective: {step1.get('objective', 'N/A')}")
-        constraints = step1.get('constraints', [])
-        if constraints:
-            lines.append(f"- Constraints: {', '.join(constraints)}")
-        lines.append(f"- Codebase Patterns: {step1.get('codebase_patterns', 'N/A')}")
-        lines.append("")
-        
-        # Step 2: Strategy
-        step2 = data.get('step2_strategy', {})
-        lines.append("STEP 2: EVALUATE REPAIR STRATEGIES")
-        lines.append(f"Think: {step2.get('think', 'N/A')}")
-        strategies = step2.get('strategies', [])
-        for s in strategies:
-            lines.append(f"  | {s.get('name', '?')} | Pros: {s.get('pros', '?')} | Cons: {s.get('cons', '?')}")
-        lines.append(f"Selected: {step2.get('selected', 'N/A')}")
-        lines.append(f"Rationale: {step2.get('rationale', 'N/A')}")
-        lines.append("")
-        
-        # Step 3: Patch Design
-        step3 = data.get('step3_patch_design', {})
-        lines.append("STEP 3: DESIGN MINIMAL PATCH")
-        lines.append(f"Think: {step3.get('think', 'N/A')}")
-        lines.append(f"- Location: {step3.get('location', 'N/A')}")
-        lines.append(f"- Change: {step3.get('change_description', 'N/A')}")
-        lines.append(f"- Lines: +{step3.get('lines_added', 0)} / -{step3.get('lines_removed', 0)}")
-        lines.append("")
-        
-        # Step 4: Verification
-        step4 = data.get('step4_verification', {})
-        lines.append("STEP 4: VERIFY CORRECTNESS")
-        lines.append(f"Think: {step4.get('think', 'N/A')}")
-        lines.append(f"✓ Bug case: {step4.get('bug_case', 'N/A')}")
-        lines.append(f"✓ Normal cases: {step4.get('normal_cases', 'N/A')}")
-        lines.append(f"✓ Edge cases: {step4.get('edge_cases', 'N/A')}")
-        lines.append("")
-        
-        # Step 5: Quality
-        step5 = data.get('step5_quality', {})
-        lines.append("STEP 5: ASSESS QUALITY AND IMPACT")
-        lines.append(f"- Minimality: {step5.get('minimality', 'N/A')}")
-        lines.append(f"- Consistency: {step5.get('consistency', 'N/A')}")
-        lines.append(f"- Breaking Changes: {step5.get('breaking_changes', 'none')}")
-        affected = step5.get('affected_components', [])
-        if affected:
-            lines.append(f"- Affected Components: {', '.join(affected)}")
-        lines.append("")
-        
-        # Patch
+        # Patch section only
         patch_data = data.get('patch', {})
-        lines.append("=" * 78)
-        lines.append("PATCH")
-        lines.append("=" * 78)
-        lines.append(f"File: {patch_data.get('file', target_file)}")
-        lines.append(f"Commit Message: {patch_data.get('commit_message', 'Fix bug')}")
+        lines.append(f"**File:** `{patch_data.get('file', target_file)}`")
+        lines.append(f"**Commit Message:** {patch_data.get('commit_message', 'Fix bug')}")
         lines.append("")
+        lines.append("```diff")
         lines.append(patch_data.get('diff', '# No diff generated'))
+        lines.append("```")
         
         return "\n".join(lines)
 
