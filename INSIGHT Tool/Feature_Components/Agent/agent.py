@@ -632,16 +632,11 @@ class BugLocalizationAgent:
         """
         Chain-of-Thought Patch Generator Node.
         
+        Generates patches for ALL selected bug locations (multiple files supported).
+        
         Implements structured reasoning for patch generation based on:
         - ThinkRepair (Yin et al., ISSTA 2024) - Self-directed CoT reasoning
         - SCoT (Li et al., TOSEM 2025) - Structured intermediate reasoning
-        
-        5-Step Process:
-        1. Define Repair Objective and Constraints
-        2. Evaluate Repair Strategies  
-        3. Design Minimal Patch
-        4. Verify Correctness
-        5. Assess Quality and Impact
         """
         logger.info("--- Patch Generator Node (Chain-of-Thought) ---")
         
@@ -654,81 +649,82 @@ class BugLocalizationAgent:
                 "messages": [AIMessage(content="No bug locations identified for patch generation.")]
             }
         
-        # Use top candidate for patch generation
-        top_func = selected_functions[0]
-        target_file = top_func.get('file_path') or top_func.get('path', '')
-        target_code = self._get_source_code(top_func)
-        analysis = top_func.get('analysis', '')
-        
         issue_text = f"Title: {state['issue_title']}\nDescription: {state['issue_body']}"
         
-        # Build the Chain-of-Thought prompt
+        # Build context for ALL selected functions
+        bug_locations_text = ""
+        for i, func in enumerate(selected_functions):
+            file_path = func.get('file_path') or func.get('path', '')
+            code = self._get_source_code(func)
+            analysis = func.get('analysis', '')
+            
+            bug_locations_text += f"""
+--- Bug Location {i+1} ---
+File: {file_path}
+Function: {func.get('name', 'Unknown')}
+Analysis: {analysis}
+Code:
+```
+{code}
+```
+"""
+        
+        # Build the Chain-of-Thought prompt for multiple files
         system_msg = """You are an expert software engineer specializing in Automated Program Repair.
-Your task is to generate a patch using a structured Chain-of-Thought (CoT) process.
+Your task is to generate patches for ALL identified bug locations using a structured Chain-of-Thought (CoT) process.
 
-Methodology based on:
-- ThinkRepair (Yin et al., ISSTA 2024) - Self-directed reasoning for program repair
-- Structured Chain-of-Thought (Li et al., TOSEM 2025) - Structured intermediate reasoning
-
-You MUST follow this 5-step reasoning process and output a JSON object:
+You MUST output a JSON object with the following structure:
 
 {
   "step1_objective": {
     "think": "What must be fixed and what constraints apply?",
     "objective": "Description of what needs to be fixed",
-    "constraints": ["list of constraints"],
-    "codebase_patterns": "Relevant patterns from the codebase to follow"
+    "constraints": ["list of constraints"]
   },
   "step2_strategy": {
     "think": "What are the possible repair approaches?",
-    "strategies": [
-      {"name": "Strategy Name", "pros": "advantages", "cons": "disadvantages"}
-    ],
     "selected": "Chosen strategy",
     "rationale": "Why this strategy best fits"
   },
-  "step3_patch_design": {
-    "think": "What is the smallest correct change?",
-    "location": "File and line numbers",
-    "change_description": "Description of the change",
-    "lines_added": 0,
-    "lines_removed": 0
-  },
-  "step4_verification": {
+  "step3_verification": {
     "think": "Does this fix all cases?",
     "bug_case": "How it fixes the reported bug",
-    "normal_cases": "Confirms normal behavior is preserved",
     "edge_cases": "How edge cases are handled"
   },
-  "step5_quality": {
-    "minimality": "1-5 score with justification",
-    "consistency": "1-5 score with justification",
-    "breaking_changes": "none or description",
-    "affected_components": ["list of affected code"]
-  },
-  "patch": {
-    "file": "path/to/file",
-    "diff": "Unified diff format patch",
-    "commit_message": "Concise commit message"
-  }
+  "patches": [
+    {
+      "file": "path/to/file1.py",
+      "function_name": "function_name",
+      "start_line": 45,
+      "end_line": 52,
+      "corrected_code": "The corrected code snippet",
+      "commit_message": "Concise commit message for this fix"
+    },
+    {
+      "file": "path/to/file2.py",
+      "function_name": "another_function",
+      "start_line": 10,
+      "end_line": 15,
+      "corrected_code": "The corrected code snippet",
+      "commit_message": "Concise commit message for this fix"
+    }
+  ],
+  "overall_commit_message": "Single commit message summarizing all fixes"
 }
 
-IMPORTANT: Output ONLY valid JSON. No markdown formatting outside the JSON.
+IMPORTANT: 
+- Output ONLY valid JSON. No markdown formatting outside the JSON.
+- Generate a patch for EACH bug location provided.
+- The corrected_code should be the COMPLETE fixed code for the specified line range.
 """
         
         prompt = f"""Issue:
 {issue_text}
 
-Bug Analysis:
-{analysis}
+Identified Bug Locations:
+{bug_locations_text}
 
-Target File: {target_file}
-Target Code:
-```
-{target_code}
-```
-
-Generate the Chain-of-Thought patch repair JSON following the 5-step process."""
+Generate the Chain-of-Thought patch repair JSON with patches for ALL bug locations."""
 
         response = self.llm_service.get_response(prompt, system_message=system_msg, json_mode=True)
         
@@ -745,10 +741,10 @@ Generate the Chain-of-Thought patch repair JSON following the 5-step process."""
             data, _ = json.JSONDecoder().raw_decode(response[start_idx:])
             patch_reasoning = data
             
-            # Format the output with CoT reasoning as comments
-            formatted_patch = self._format_patch_with_cot(data, target_file)
+            # Format the output for multiple patches
+            formatted_patch = self._format_patches(data)
             
-            logger.info("Patch generation complete with CoT reasoning")
+            logger.info(f"Patch generation complete: {len(data.get('patches', []))} patches generated")
             
         except Exception as e:
             logger.error(f"Failed to parse patch generator response: {e}")
@@ -761,26 +757,63 @@ Generate the Chain-of-Thought patch repair JSON following the 5-step process."""
         return {
             "patch": formatted_patch,
             "patch_reasoning": patch_reasoning,
-            "messages": [AIMessage(content="Generated patch with Chain-of-Thought reasoning.")]
+            "messages": [AIMessage(content=f"Generated {len(data.get('patches', []))} patches with Chain-of-Thought reasoning.")]
         }
 
-    def _format_patch_with_cot(self, data: Dict[str, Any], target_file: str) -> str:
+    def _format_patches(self, data: Dict[str, Any]) -> str:
         """
-        Format the patch output for GitHub comment.
+        Format multiple patches for GitHub comment.
         
-        Only returns the patch section (diff + commit message).
+        Returns the patches as code snippets with line numbers.
         Full CoT reasoning is preserved in patch_reasoning for debugging.
         """
         lines = []
         
-        # Patch section only
-        patch_data = data.get('patch', {})
-        lines.append(f"**File:** `{patch_data.get('file', target_file)}`")
-        lines.append(f"**Commit Message:** {patch_data.get('commit_message', 'Fix bug')}")
-        lines.append("")
-        lines.append("```diff")
-        lines.append(patch_data.get('diff', '# No diff generated'))
-        lines.append("```")
+        patches = data.get('patches', [])
+        overall_commit = data.get('overall_commit_message', '')
+        
+        if not patches:
+            return "*No patches generated*"
+        
+        if overall_commit:
+            lines.append(f"**Summary:** {overall_commit}")
+            lines.append("")
+        
+        for i, patch in enumerate(patches):
+            if i > 0:
+                lines.append("---")  # Separator between patches
+                lines.append("")
+            
+            file_path = patch.get('file', 'Unknown')
+            func_name = patch.get('function_name', '')
+            start_line = patch.get('start_line')
+            end_line = patch.get('end_line')
+            corrected_code = patch.get('corrected_code', '')
+            commit_msg = patch.get('commit_message', '')
+            
+            lines.append(f"**File:** `{file_path}`")
+            if func_name:
+                lines.append(f"**Function:** `{func_name}`")
+            if start_line and end_line:
+                lines.append(f"**Lines:** {start_line}-{end_line}")
+            if commit_msg:
+                lines.append(f"**Fix:** {commit_msg}")
+            lines.append("")
+            
+            if corrected_code:
+                lines.append("**Suggested Fix:**")
+                lines.append("```python")
+                # Add line numbers to each line of the corrected code
+                code_lines = corrected_code.split('\n')
+                line_num = start_line if start_line else 1
+                for code_line in code_lines:
+                    lines.append(f"{line_num}: {code_line}")
+                    line_num += 1
+                lines.append("```")
+            else:
+                lines.append("*No fix generated for this location*")
+            
+            lines.append("")
         
         return "\n".join(lines)
 
