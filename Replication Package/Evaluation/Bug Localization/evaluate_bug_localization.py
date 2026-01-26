@@ -273,10 +273,17 @@ def evaluate():
                 bug_localizer = BugLocalizationAgent(repo_name, repo_dir)
                 
                 # Run localization
-                selected_funcs, all_candidates, token_usage = bug_localizer.localize(issue_title, issue_body)
+                # Fix: Localize returns 5 values now (selected, candidates, tokens, patch, reasoning)
+                # We explicitly disable patch generation for evaluation
+                selected_funcs, all_candidates, token_usage, generated_patch, patch_reasoning = bug_localizer.localize(
+                    issue_title, 
+                    issue_body, 
+                    generate_patch=False
+                )
                 
                 # --- PATCH GENERATION (Verification of CoT) ---
-                generated_patch = ""
+                # generated_patch is already returned by localize if enabled.
+                # Since we disabled it, it should be empty.
                 # Patch generation disabled by user request
 
             except Exception as e:

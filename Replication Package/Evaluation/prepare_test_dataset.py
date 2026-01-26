@@ -3,6 +3,8 @@ from datasets import load_dataset
 import re
 from collections import Counter
 import os
+import requests
+import time
 
 def detect_language(file_path):
     """Detect programming language from file extension"""
@@ -129,9 +131,6 @@ def get_repo_info(url):
         return match.group(1), match.group(2)
     return None, None
 
-import requests
-import time
-
 def get_github_token():
     """Retrieves the GitHub token from the environment variable."""
     return os.environ.get("GITHUB_TOKEN")
@@ -176,10 +175,17 @@ def get_repo_details(owner, name):
         print(f"    Error fetching details for {owner}/{name}: {e}")
         return None
 
-def process_language(lang_code, num_repos=3, min_issues=10):
+def process_language(lang_code, target_repos=None, num_new_repos=0, max_issues=5):
+    """
+    Process language split.
+    target_repos: set of existing repos to preserve
+    num_new_repos: number of additional NEW repos to find
+    max_issues: max unique issues per repo
+    """
     print(f"Processing language: {lang_code}...")
     splits = ['test', 'train', 'validation']
     all_ds = []
+    
     for split in splits:
         try:
             print(f"Loading {split} split for {lang_code}...")
@@ -192,7 +198,7 @@ def process_language(lang_code, num_repos=3, min_issues=10):
         print(f"No data found for {lang_code}")
         return []
 
-    # Group by repository and collect repo metadata from dataset
+    # Group by repository
     repo_issues = {}
     repo_metadata = {}
     
@@ -212,9 +218,16 @@ def process_language(lang_code, num_repos=3, min_issues=10):
                 continue
             
         repo_full_name = f"{owner}/{name}"
+        
+        # If we have target repos, and we are NOT looking for new ones, we could filter here.
+        # But since we might be looking for new ones, we need to collect initial data.
+        # However, to save memory, if target_repos IS set and num_new_repos is 0, we can filter.
+        if target_repos is not None and num_new_repos == 0:
+             if repo_full_name not in target_repos:
+                 continue
+
         if repo_full_name not in repo_issues:
             repo_issues[repo_full_name] = []
-            # Store repo metadata from dataset (no API calls needed!)
             repo_metadata[repo_full_name] = {
                 'file_count': item.get('repo_files_without_tests_count', 0),
                 'lines_count': item.get('repo_lines_count', 0),
@@ -224,46 +237,70 @@ def process_language(lang_code, num_repos=3, min_issues=10):
         
         repo_issues[repo_full_name].append(item)
     
-    # Filter repos with enough issues
-    valid_repos_list = [k for k, v in repo_issues.items() if len(v) >= min_issues]
-    print(f"Found {len(valid_repos_list)} repositories with >= {min_issues} issues.")
+    selected_repo_names = []
     
-    # Filter by File Count (50 < count < 200)
-    # Also prioritize 50-100 range if possible, but strict range is 50-200 for now.
-    size_filtered_repos = []
-    for r in valid_repos_list:
-        fc = repo_metadata[r]['file_count']
-        if 50 < fc < 200:
-            size_filtered_repos.append(r)
+    # 1. Select Existing Target Repos
+    if target_repos is not None:
+        found_targets = [r for r in repo_issues.keys() if r in target_repos]
+        print(f"  Found {len(found_targets)} existing target repositories in {lang_code} split.")
+        selected_repo_names.extend(found_targets)
+        
+    # 2. Select NEW Repos if requested
+    if num_new_repos > 0:
+        print(f"  Searching for {num_new_repos} new {lang_code} repositories...")
+        candidates = []
+        for r, issues in repo_issues.items():
+            # Skip if already in targets
+            if target_repos is not None and r in target_repos:
+                continue
             
-    print(f"Filtered down to {len(size_filtered_repos)} repos with 50 < files < 200 (from {len(valid_repos_list)} valid candidate repos)")
-    
-    # Sort by file count (ascending)
-    sorted_repos_by_size = sorted(
-        size_filtered_repos,
-        key=lambda r: repo_metadata[r]['file_count']
-    )
-    
-    print(f"\nSmallest repositories by file count (Targeting {num_repos}):")
-    for repo in sorted_repos_by_size[:num_repos]:
-        meta = repo_metadata[repo]
-        print(f"  {repo}: Files={meta['file_count']}, Lines={meta['lines_count']}, Stars={meta['stars']}")
-    
-    # Take top N
-    selected_repo_names = sorted_repos_by_size[:num_repos]
-    
+            # Check constraints
+            fc = repo_metadata[r]['file_count']
+            if not (50 < fc < 200):
+                continue
+                
+            # Check unique issues count (at least max_issues to be useful)
+            unique_urls = set()
+            for i in issues:
+                u = i.get('html_url') or i.get('issue_url')
+                if u: unique_urls.add(u)
+            
+            if len(unique_urls) >= max_issues:
+                candidates.append(r)
+        
+        print(f"  Found {len(candidates)} candidate new repositories.")
+        
+        # Sort by file count (smallest first)
+        sorted_candidates = sorted(
+            candidates,
+            key=lambda r: repo_metadata[r]['file_count']
+        )
+        
+        new_selections = sorted_candidates[:num_new_repos]
+        selected_repo_names.extend(new_selections)
+        print(f"  Selected new repositories: {new_selections}")
+
     extracted_data = []
     
     for repo_name in selected_repo_names:
         issues = repo_issues[repo_name]
         meta = repo_metadata[repo_name]
-        print(f"\n  Extracting from {repo_name} (Files: {meta['file_count']}, Lines: {meta['lines_count']})...")
         
-        # Take up to 10 issues (user didn't specify max per repo, but kept it reasonable)
-        # User said "greater than or equal 3 issues", didn't specify max.
-        selected_issues = issues[:10] 
+        # Deduplicate issues by URL
+        unique_issues = {}
+        for issue in issues:
+            url = issue.get('html_url') or issue.get('issue_url')
+            if url and url not in unique_issues:
+                unique_issues[url] = issue
         
-        for issue in selected_issues:
+        final_issues = list(unique_issues.values())
+        
+        print(f"\n  Extracting from {repo_name} (Files: {meta['file_count']}). Found {len(final_issues)} unique issues.")
+        
+        # Limit to max_issues
+        selected_issues_batch = final_issues[:max_issues]
+        
+        for issue in selected_issues_batch:
             diff_text = issue.get('diff', '')
             changed_files, changed_classes, changed_funcs, changed_lines = parse_diff(diff_text)
             
@@ -272,7 +309,7 @@ def process_language(lang_code, num_repos=3, min_issues=10):
                 'Language': lang_code,
                 'Repository': repo_name,
                 'Repo Link': f"https://github.com/{repo_name}",
-                'Repo Size (KB)': meta.get('lines_count', 0) // 50,  # Rough estimate: ~50 lines per KB
+                'Repo Size (KB)': meta.get('lines_count', 0) // 50,
                 'Total Files': meta['file_count'],
                 'Issue Title': issue.get('issue_title'),
                 'Issue Description': issue.get('issue_body'),
@@ -289,18 +326,43 @@ def process_language(lang_code, num_repos=3, min_issues=10):
             
     return extracted_data
 
+def get_target_repos(file_path):
+    """
+    Reads the existing dataset file and extracts the list of unique repositories.
+    """
+    if not os.path.exists(file_path):
+        print(f"Warning: {file_path} does not exist. Cannot preserve repos.")
+        return None
+        
+    try:
+        # Check extension
+        if file_path.endswith('.xlsx'):
+             df = pd.read_excel(file_path)
+        else:
+             df = pd.read_csv(file_path)
+        
+        if 'Repository' not in df.columns:
+             print("Repository column not found.")
+             return None
+
+        repos = set(df['Repository'].unique())
+        print(f"Loaded {len(repos)} target repositories from {file_path}")
+        return repos
+    except Exception as e:
+        print(f"Error reading {file_path}: {e}")
+        return None
+
 def main():
     output_file = 'test_dataset.xlsx'
-    csv_fallback = 'test_dataset.csv'
     
-    # User requested to RECREATE the dataset. We do NOT load existing data.
-    # But we might want to backup just in case.
+    target_repos = get_target_repos(output_file)
+    
+    # Backup
     if os.path.exists(output_file):
         from datetime import datetime
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         backup_file = f'test_dataset_backup_{timestamp}.xlsx'
         try:
-           # simple rename
            os.rename(output_file, backup_file)
            print(f"Backed up existing dataset to {backup_file} before recreation.")
         except Exception as e:
@@ -308,28 +370,13 @@ def main():
 
     all_data = []
     
-    # Process Python with new criteria: 20 repos, min 3 issues
-    # Note: process_language defaults were 3, 10. We pass 20, 3.
-    py_data = process_language('py', num_repos=20, min_issues=3)
+    # Process Python: Preserve existing, 2 NEW, max 5 issues
+    py_data = process_language('py', target_repos=target_repos, num_new_repos=2, max_issues=5)
+    all_data.extend(py_data)
     
-    existing_issue_urls = set()
-    new_py_count = 0
-    for row in py_data:
-        if row['Issue URL'] not in existing_issue_urls:
-            all_data.append(row)
-            existing_issue_urls.add(row['Issue URL'])
-            new_py_count += 1
-    print(f"Added {new_py_count} Python issues.")
-    
-    # Process Java with new criteria
-    java_data = process_language('java', num_repos=20, min_issues=3)
-    new_java_count = 0
-    for row in java_data:
-        if row['Issue URL'] not in existing_issue_urls:
-            all_data.append(row)
-            existing_issue_urls.add(row['Issue URL'])
-            new_java_count += 1
-    print(f"Added {new_java_count} Java issues.")
+    # Process Java: Preserve existing, 2 NEW, max 5 issues
+    java_data = process_language('java', target_repos=target_repos, num_new_repos=2, max_issues=5)
+    all_data.extend(java_data)
     
     if not all_data:
         print("No data to save!")
@@ -337,14 +384,17 @@ def main():
 
     df = pd.DataFrame(all_data)
     
+    # Deduplicate global rows
+    df.drop_duplicates(subset=['Issue URL'], inplace=True)
+    
     print(f"\nSaving {len(df)} total rows to {output_file}...")
     try:
         df.to_excel(output_file, index=False)
         print("Done!")
     except ImportError:
         print("openpyxl not installed. Saving as CSV instead.")
-        df.to_csv(csv_fallback, index=False)
-        print(f"Saved to {csv_fallback}")
+        df.to_csv('test_dataset.csv', index=False)
+        print("Saved to test_dataset.csv")
 
 if __name__ == "__main__":
     main()

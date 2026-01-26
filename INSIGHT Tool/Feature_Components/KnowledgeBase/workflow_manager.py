@@ -109,7 +109,7 @@ class WorkflowManager:
         
         # Format concise analysis from top candidates (agent already provides analysis)
         analysis = ""
-        ANALYSIS_LIMIT = 3
+        ANALYSIS_LIMIT = 5
         top_candidates = selected_functions[:ANALYSIS_LIMIT]
         
         for idx, func in enumerate(top_candidates, 1):
