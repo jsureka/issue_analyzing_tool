@@ -157,7 +157,7 @@ class BugLocalizationAgent:
         workflow.add_node("planner", self.planner_node)
         workflow.add_node("retriever", self.retriever_node)
         workflow.add_node("expander", self.expander_node)
-        workflow.add_node("generator", self.generator_node)
+        workflow.add_node("selector", self.selector_node)
         workflow.add_node("patch_generator", self.patch_generator_node)
         
         # Set entry point
@@ -166,15 +166,15 @@ class BugLocalizationAgent:
         # Edges
         workflow.add_edge("planner", "retriever")
         workflow.add_edge("retriever", "expander")
-        workflow.add_edge("expander", "generator")
+        workflow.add_edge("expander", "selector")
         
-        # Conditional edge: generator -> patch_generator OR END
+        # Conditional edge: selector -> patch_generator OR END
         def should_generate_patch(state: AgentState) -> str:
             if state.get("generate_patch", False):
                 return "patch_generator"
             return END
         
-        workflow.add_conditional_edges("generator", should_generate_patch, {
+        workflow.add_conditional_edges("selector", should_generate_patch, {
             "patch_generator": "patch_generator",
             END: END
         })
@@ -467,9 +467,9 @@ class BugLocalizationAgent:
             "messages": [AIMessage(content=f"Expanded candidates to {len(expanded_candidates)} using graph.")]
         }
 
-    def generator_node(self, state: AgentState) -> Dict:
-        """Grounded Generator: Identify bugs with Evidence (Claim-Evidence Mapping)"""
-        logger.info("--- Generator Node ---")
+    def selector_node(self, state: AgentState) -> Dict:
+        """Selector Node: Identify bugs with Evidence (Claim-Evidence Mapping)"""
+        logger.info("--- Selector Node ---")
         candidates = state['candidate_functions']
         issue_text = f"Title: {state['issue_title']}\nDescription: {state['issue_body']}"
         
@@ -481,7 +481,7 @@ class BugLocalizationAgent:
         sliced_candidates = valid_candidates[:limit]
         
         # Log candidates sent to LLM for debugging
-        logger.info(f"--- Generator Candidates ({len(sliced_candidates)}) ---")
+        logger.info(f"--- Selector Candidates ({len(sliced_candidates)}) ---")
         for i, c in enumerate(sliced_candidates):
              logger.info(f"#{i+1}: {c.get('name')} | {c.get('file_path')} | Score: {c.get('score', 0):.4f}")
 
@@ -505,7 +505,7 @@ class BugLocalizationAgent:
             candidate_str += "\n"
             
         system_msg = """You are a Lead Investigator validating a bug report.
-        Your task is to identify the root cause function(s) and provide hard EVIDENCE.
+        Your task is to identify the top 3-5 most suspicious bug locations and provide hard EVIDENCE.
         
         The code snippets provided are prefixed with [file_path:line_number].
         For each candidate, check if it contains the bug described.
@@ -526,9 +526,10 @@ class BugLocalizationAgent:
         }
         
         Rules:
-        1. Only include 'bug_locations' if you are confident. If none found, return empty list.
-        2. 'evidence' must cite specific lines from the provided snippets.
-        3. Do NOT guess. If insufficient evidence, state that in summary.
+        1. Identify at least 3 suspicious locations if possible, even if confidence is MEDIUM or LOW.
+        2. Rank your findings by likelyhood/confidence.
+        3. 'evidence' must cite specific lines from the provided snippets.
+        4. Do NOT guess blindly, but be expansive in your selection to ensure the bug is caught.
         """
         
         prompt = f"Issue:\n{issue_text}\n\nCandidates:\n{candidate_str}\n\nGenerate Bug Report JSON."
