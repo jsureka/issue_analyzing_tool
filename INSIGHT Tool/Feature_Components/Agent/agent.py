@@ -517,7 +517,7 @@ class BugLocalizationAgent:
                 {
                     "candidate_index": 1, 
                     "confidence": "HIGH" | "MEDIUM" | "LOW",
-                    "reasoning": "Explanation of why this is the bug...",
+                    "reasoning": "Concise, single-sentence explanation of why this is the bug...",
                     "evidence": [
                         {"file": "path/to/file.py", "lines": [10, 11, 12]}
                     ]
@@ -530,6 +530,8 @@ class BugLocalizationAgent:
         2. Rank your findings by likelyhood/confidence.
         3. 'evidence' must cite specific lines from the provided snippets.
         4. Do NOT guess blindly, but be expansive in your selection to ensure the bug is caught.
+        5. Do NOT select the same function code location multiple times.
+        6. The 'reasoning' must be strictly about THIS candidate's relevance to the bug. Do not mention other candidates.
         """
         
         prompt = f"Issue:\n{issue_text}\n\nCandidates:\n{candidate_str}\n\nGenerate Bug Report JSON."
@@ -537,6 +539,8 @@ class BugLocalizationAgent:
         response = self.llm_service.get_response(prompt, system_message=system_msg, json_mode=True)
         
         selected = []
+        seen_functions = set() # Track (file_path, function_name) to prevent duplicates
+
         try:
             # Parse JSON
             start_idx = response.find('{')
@@ -554,6 +558,15 @@ class BugLocalizationAgent:
                     if 0 <= actual_idx < len(sliced_candidates):
                         cand = sliced_candidates[actual_idx]
                         
+                        # Deduplication check
+                        fpath = cand.get('file_path') or cand.get('path')
+                        fname = cand.get('name')
+                        unique_key = (fpath, fname)
+                        
+                        if unique_key in seen_functions:
+                            continue
+                        seen_functions.add(unique_key)
+
                         # Enrich candidate with RAG output
                         cand['analysis'] = loc.get('reasoning', '')
                         cand['confidence'] = loc.get('confidence', '')
