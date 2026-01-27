@@ -72,8 +72,8 @@ cd issue_analyzing_tool
 
 2. Install dependencies:
 ```bash
-pip install -r requirements.txt
-```
+cd "INSIGHT Tool"
+pip install -r requirements.txt```
 
 3. Set up environment variables:
 ```bash
