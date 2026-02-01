@@ -382,12 +382,12 @@ def main():
     # Process Python
     print("Processing Python...")
     # Increase num_new_repos to ensure we find enough small repos
-    py_data = process_language('py', target_repos=target_repos, num_new_repos=20, max_issues=15)
+    py_data = process_language('py', target_repos=target_repos, num_new_repos=0, max_issues=100)
     all_data.extend(py_data)
     
     # Process Java
     print("Processing Java...")
-    java_data = process_language('java', target_repos=target_repos, num_new_repos=20, max_issues=15)
+    java_data = process_language('java', target_repos=target_repos, num_new_repos=0, max_issues=100)
     all_data.extend(java_data)
     
     if not all_data:
