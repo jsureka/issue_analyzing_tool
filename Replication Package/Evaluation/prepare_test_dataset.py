@@ -254,11 +254,11 @@ def process_language(lang_code, target_repos=None, num_new_repos=0, max_issues=5
             if target_repos is not None and r in target_repos:
                 continue
             
-            # Check constraints
-            fc = repo_metadata[r]['file_count']
-            if not (50 < fc < 200):
+            # Check file count - Strict user constraint: < 100 files
+            file_count = repo_metadata[r]['file_count']
+            if file_count is None or not (10 < file_count < 100):
+                print(f"Skipping {r}: File count {file_count} not in range (10, 100)")
                 continue
-                
             # Check unique issues count (at least max_issues to be useful)
             unique_urls = set()
             for i in issues:
@@ -300,10 +300,19 @@ def process_language(lang_code, target_repos=None, num_new_repos=0, max_issues=5
         # Limit to max_issues
         selected_issues_batch = final_issues[:max_issues]
         
-        for issue in selected_issues_batch:
+        for issue in final_issues:
             diff_text = issue.get('diff', '')
             changed_files, changed_classes, changed_funcs, changed_lines = parse_diff(diff_text)
             
+            # Skip if no meaningful entities changed
+            if not changed_classes and not changed_funcs:
+                # print(f"    Skipping issue {issue.get('html_url')}: No changed classes or functions.")
+                continue
+                
+            # Stop if we have enough issues for this repo
+            if len(extracted_data) - len([x for x in extracted_data if x['Repository'] != repo_name]) >= max_issues:
+                 break
+
             # Construct row
             row = {
                 'Language': lang_code,
@@ -370,12 +379,15 @@ def main():
 
     all_data = []
     
-    # Process Python: Preserve existing, 2 NEW, max 5 issues
-    py_data = process_language('py', target_repos=target_repos, num_new_repos=2, max_issues=5)
+    # Process Python
+    print("Processing Python...")
+    # Increase num_new_repos to ensure we find enough small repos
+    py_data = process_language('py', target_repos=target_repos, num_new_repos=20, max_issues=15)
     all_data.extend(py_data)
     
-    # Process Java: Preserve existing, 2 NEW, max 5 issues
-    java_data = process_language('java', target_repos=target_repos, num_new_repos=2, max_issues=5)
+    # Process Java
+    print("Processing Java...")
+    java_data = process_language('java', target_repos=target_repos, num_new_repos=20, max_issues=15)
     all_data.extend(java_data)
     
     if not all_data:
